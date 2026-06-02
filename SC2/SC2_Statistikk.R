@@ -37,7 +37,10 @@ check_install_update_packages <- function(packages) {
   }
 }
 
-required_packages <- c("dplyr", "lubridate", "tidyr", "data.table")
+required_packages <- c(
+  "dplyr", "lubridate", "tidyr", "data.table",
+  "stringr", "janitor", "dbplyr", "tsibble", "odbc", "DBI"
+)
 check_install_update_packages(required_packages)
 suppressPackageStartupMessages(lapply(required_packages, library, character.only = TRUE))
 like <- data.table::like

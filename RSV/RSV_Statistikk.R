@@ -33,7 +33,10 @@ check_install_update_packages <- function(packages) {
   }
 }
 
-required_packages <- c("dplyr", "lubridate")
+required_packages <- c(
+  "dplyr", "lubridate", "tidyr",
+  "stringr", "janitor", "dbplyr", "odbc", "DBI"
+)
 check_install_update_packages(required_packages)
 suppressPackageStartupMessages(lapply(required_packages, library, character.only = TRUE))
 
