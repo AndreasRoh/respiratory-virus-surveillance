@@ -37,7 +37,16 @@ season_label <- function(x) {
 write_stat_csv <- function(data, subtype_label, year_value, week_value, output_dir) {
   file_name <- paste0(subtype_label, "_", year_value, "_Week", week_value, "_statistikk.csv")
   file_path <- file.path(output_dir, file_name)
-  write.csv2(data, file = file_path, row.names = FALSE)
+  write.table(
+    data,
+    file = file_path,
+    sep = ";",
+    dec = ".",
+    row.names = FALSE,
+    col.names = TRUE,
+    quote = TRUE,
+    qmethod = "double"
+  )
   message("Saved: ", file_path)
 }
 
@@ -55,7 +64,12 @@ build_subtype_table <- function(data, subtype_regex, subtype_col_name, clade_col
     ) %>%
     filter(Sesong == current_season) %>%
     count(clade_value, Sesong, name = "Antall") %>%
-    mutate(FLAGG = 0L) %>%
+    mutate(
+      total_antall = sum(Antall),
+      Prosent = round(if_else(total_antall > 0, (Antall / total_antall) * 100, 0), 2),
+      FLAGG = 0L
+    ) %>%
+    select(-total_antall) %>%
     arrange(clade_value) %>%
     rename(!!subtype_col_name := clade_value)
 
@@ -78,9 +92,11 @@ if (!(clade_col %in% names(rsvdb))) {
 }
 
 current_season <- season_label(Sys.Date())
+rsv_current_season <- rsvdb %>%
+  filter(season_label(prove_tatt) == current_season)
 
 rsv_a <- build_subtype_table(
-  data = rsvdb,
+  data = rsv_current_season,
   subtype_regex = "A",
   subtype_col_name = "RSV A",
   clade_col = clade_col,
@@ -88,7 +104,7 @@ rsv_a <- build_subtype_table(
 )
 
 rsv_b <- build_subtype_table(
-  data = rsvdb,
+  data = rsv_current_season,
   subtype_regex = "B",
   subtype_col_name = "RSV B",
   clade_col = clade_col,
