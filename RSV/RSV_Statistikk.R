@@ -10,10 +10,32 @@ resolve_script_dir <- function() {
 
 bundle_scripts_dir <- resolve_script_dir()
 
-suppressPackageStartupMessages({
-  library(dplyr)
-  library(lubridate)
-})
+options(repos = c(CRAN = "https://cran.uni-muenster.de/"))
+
+check_install_update_packages <- function(packages) {
+  installed_pkgs <- rownames(installed.packages())
+  missing_packages <- setdiff(packages, installed_pkgs)
+  if (length(missing_packages) > 0) {
+    message("Installing missing packages: ", paste(missing_packages, collapse = ", "))
+    install.packages(missing_packages, dependencies = TRUE)
+  }
+
+  outdated_packages <- old.packages()
+  if (!is.null(outdated_packages)) {
+    outdated_required <- intersect(rownames(outdated_packages), packages)
+    if (length(outdated_required) > 0) {
+      message("Updating outdated required packages: ", paste(outdated_required, collapse = ", "))
+      tryCatch(
+        update.packages(oldPkgs = outdated_required, ask = FALSE, checkBuilt = TRUE),
+        error = function(e) message("Package update skipped: ", conditionMessage(e))
+      )
+    }
+  }
+}
+
+required_packages <- c("dplyr", "lubridate")
+check_install_update_packages(required_packages)
+suppressPackageStartupMessages(lapply(required_packages, library, character.only = TRUE))
 
 source(file.path(bundle_scripts_dir, "RSV_SQLquery.R"))
 source(file.path(bundle_scripts_dir, "RSV_DataCleaning_23-24.R"))
