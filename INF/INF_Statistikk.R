@@ -78,7 +78,16 @@ build_subtype_table <- function(data, subtype) {
 write_stat_csv <- function(data, subtype, year_value, week_value, output_dir) {
   file_name <- paste0(subtype, "_", year_value, "_Week", week_value, "_statistikk.csv")
   file_path <- file.path(output_dir, file_name)
-  write.csv2(data, file = file_path, row.names = FALSE)
+  write.table(
+    data,
+    file = file_path,
+    sep = ";",
+    dec = ".",
+    row.names = FALSE,
+    col.names = TRUE,
+    quote = TRUE,
+    qmethod = "double"
+  )
   message("Saved: ", file_path)
 }
 

@@ -96,7 +96,16 @@ build_monthly_variant_counts <- function(data, month_col, variant_col, months, v
 write_stat_csv <- function(data, suffix, year_value, week_value, output_dir) {
   file_name <- paste0("SARSCOV2_", year_value, "_Week", week_value, "_", suffix, ".csv")
   file_path <- file.path(output_dir, file_name)
-  write.csv2(data, file = file_path, row.names = FALSE)
+  write.table(
+    data,
+    file = file_path,
+    sep = ";",
+    dec = ".",
+    row.names = FALSE,
+    col.names = TRUE,
+    quote = TRUE,
+    qmethod = "double"
+  )
   message("Saved: ", file_path)
 }
 
