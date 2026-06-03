@@ -2,8 +2,24 @@
 # Input: SC2_20_25_raw_merged
 # Output: SC2_20_25_clean, SC2_20_25
 
+resolve_script_dir <- function() {
+  args_all <- commandArgs(trailingOnly = FALSE)
+  file_arg <- grep("^--file=", args_all, value = TRUE)
+  if (length(file_arg) > 0) {
+    script_path <- sub("^--file=", "", file_arg[1])
+    return(dirname(normalizePath(script_path, winslash = "/", mustWork = FALSE)))
+  }
+  this_file <- tryCatch(normalizePath(sys.frames()[[1]]$ofile, winslash = "/", mustWork = FALSE), error = function(e) "")
+  if (nzchar(this_file)) {
+    return(dirname(this_file))
+  }
+  normalizePath(getwd(), winslash = "/", mustWork = TRUE)
+}
+
+bundle_scripts_dir <- resolve_script_dir()
+
 if (!exists("normalize_geography_columns")) {
-  source(file.path("Source_files", "common_report_utils.R"))
+  source(file.path(bundle_scripts_dir, "..", "Source_files", "common_report_utils.R"))
 }
 
 if (!exists("SC2_20_25_raw_merged")) {

@@ -64,8 +64,9 @@ resolve_script_dir <- function() {
 }
 bundle_scripts_dir <- resolve_script_dir()
 
-if (file.exists(file.path(bundle_scripts_dir, "common_report_utils.R"))) {
-  source(file.path(bundle_scripts_dir, "common_report_utils.R"))
+common_report_utils_path <- file.path(bundle_scripts_dir, "..", "Source_files", "common_report_utils.R")
+if (file.exists(common_report_utils_path)) {
+  source(common_report_utils_path)
 }
 
 variant_levels <- SC2db %>%

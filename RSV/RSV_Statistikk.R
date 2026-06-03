@@ -1,4 +1,10 @@
 resolve_script_dir <- function() {
+  if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+    ctx <- tryCatch(rstudioapi::getSourceEditorContext(), error = function(e) NULL)
+    if (!is.null(ctx) && nzchar(ctx$path)) {
+      return(dirname(normalizePath(ctx$path, winslash = "/", mustWork = FALSE)))
+    }
+  }
   args_all <- commandArgs(trailingOnly = FALSE)
   file_arg <- grep("^--file=", args_all, value = TRUE)
   if (length(file_arg) > 0) {

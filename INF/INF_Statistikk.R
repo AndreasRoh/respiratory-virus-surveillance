@@ -1,5 +1,27 @@
 options(repos = c(CRAN = "https://cran.uni-muenster.de/"))
 
+resolve_script_dir <- function() {
+  if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+    ctx <- tryCatch(rstudioapi::getSourceEditorContext(), error = function(e) NULL)
+    if (!is.null(ctx) && nzchar(ctx$path)) {
+      return(dirname(normalizePath(ctx$path, winslash = "/", mustWork = FALSE)))
+    }
+  }
+  args_all <- commandArgs(trailingOnly = FALSE)
+  file_arg <- grep("^--file=", args_all, value = TRUE)
+  if (length(file_arg) > 0) {
+    script_path <- sub("^--file=", "", file_arg[1])
+    return(dirname(normalizePath(script_path, winslash = "/", mustWork = FALSE)))
+  }
+  this_file <- tryCatch(normalizePath(sys.frames()[[1]]$ofile, winslash = "/", mustWork = FALSE), error = function(e) "")
+  if (nzchar(this_file)) {
+    return(dirname(this_file))
+  }
+  normalizePath(getwd(), winslash = "/", mustWork = TRUE)
+}
+
+bundle_scripts_dir <- resolve_script_dir()
+
 check_install_update_packages <- function(packages) {
   installed_pkgs <- rownames(installed.packages())
   missing_packages <- setdiff(packages, installed_pkgs)
@@ -29,8 +51,8 @@ required_packages <- c(
 check_install_update_packages(required_packages)
 suppressPackageStartupMessages(lapply(required_packages, library, character.only = TRUE))
 
-source("INF/INF_SQLquery_25-26.R")
-source("INF/INF_DataCleaning_25-26.R")
+source(file.path(bundle_scripts_dir, "INF_SQLquery_25-26.R"))
+source(file.path(bundle_scripts_dir, "INF_DataCleaning_25-26.R"))
 
 if (!exists("fludb") && exists("INF_25_26_raw_merged")) {
   fludb <- INF_25_26_raw_merged
