@@ -1,0 +1,9 @@
+issue_code;issue_label;flagged_n
+missing_gisaid_isolate_name;GISAID isolate name is missing while sequence-linked fields are present;96
+no_ngs_but_mutations;NGS-Resultat is blank, but mutation / resistance calls are populated;84
+no_ngs_but_nextclade;NGS-Resultat is blank, but at least one nc_ field is populated;84
+no_ngs_but_signal;NGS-Resultat is blank, but other sequence-linked fields are populated;84
+no_ngs_but_gisaid;NGS-Resultat is blank, but at least one GISAID field is populated;83
+adamantane_irrelevant_for_b;Adamantane-related fields are populated for a B lineage sample;74
+x_in_mutations;Mutation columns contain X characters;28
+high_x_load;Mutation X-load is in the top 5 percent of non-zero rows;2

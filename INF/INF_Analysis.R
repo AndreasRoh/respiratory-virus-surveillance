@@ -152,6 +152,8 @@ fludb <- fludb %>%
     prove_project_clean = ifelse(prove_kategori_group == "Non-Sentinel", clean_project_code(prove_kategori), NA_character_)
   )
 
+invisible(timed_step("Run FLuDB QC checks", source(file.path(bundle_scripts_dir, "INF_QC_25-26.R"))))
+
 season_info <- current_and_previous_seasons(Sys.Date())
 current_season_label <- season_info$current_label
 previous_season_label <- season_info$previous_label
@@ -926,9 +928,10 @@ for (i in seq_len(nrow(frequency_table_df))) {
         frequency_table_df[i, month] <- paste0(count, " (", pct, "%)")
       } else {
         frequency_table_df[i, month] <- paste0(count, " (0.0%)")
-      }
-    }
-  }
+}
+}
+}
+
 }
 # Handling NA replacements
 frequency_table_df[is.na(frequency_table_df)] <- "-"
@@ -2008,6 +2011,7 @@ if (FALSE) {
       title = paste(subtype_name, "- Pasient landsdel")
     )
   }
+
 }
 
 
@@ -2076,9 +2080,14 @@ for (mutation in mutations) {
 # Combine mutations into a single column
 flu_mut_data <- flu_mut_data %>%
   mutate(
-    Combination = apply(flu_mut_data[, mutations], 1, function(x) {
-      paste(names(x)[x == 1], collapse = ",")
-    })
+    Combination = apply(
+      as.data.frame(dplyr::select(., dplyr::all_of(mutations))),
+      1,
+      function(x) {
+        combination <- paste(names(x)[as.integer(x) == 1], collapse = ",")
+        ifelse(combination == "", "ingen mutasjoner", combination)
+      }
+    )
   )
 
 # Summarize occurrences of mutation combinations by month and flu type
@@ -2096,34 +2105,19 @@ counts <- counts %>%
 countm <- counts %>%
   mutate(YearMonth = parse_month_label(YearMonth))
 
-varmekart_data <- dcast(
-  countm,
-  YearMonth + ngs_sekvens_resultat ~ Combination,
-  value.var = "Percentage",
-  fill = 0
-)
+varmekart_data <- countm %>%
+  tidyr::pivot_wider(
+    names_from = Combination,
+    values_from = Percentage,
+    values_fill = 0
+  )
 
-# Melt the data for plotting
-varmekart_data_melted <- melt(
-  varmekart_data,
-  id.vars = c("YearMonth", "ngs_sekvens_resultat")
-)
-
-# Replace NA or empty mutation combinations with "ingen mutasjoner"
-varmekart_data[is.na(varmekart_data)] <- 0 # Ensure missing values are treated as 0
-varmekart_data <- varmekart_data %>%
-  rename_with(~ replace(., . == "Var.3", "ingen mutasjoner"))
-
-# Melt the data for plotting
-varmekart_data_melted <- melt(
-  varmekart_data,
-  id.vars = c("YearMonth", "ngs_sekvens_resultat")
-)
-
-# Replace empty combination names with "ingen mutasjoner"
-varmekart_data_melted$variable[
-  varmekart_data_melted$variable == ""
-] <- "ingen mutasjoner"
+varmekart_data_melted <- varmekart_data %>%
+  tidyr::pivot_longer(
+    cols = -c(YearMonth, ngs_sekvens_resultat),
+    names_to = "variable",
+    values_to = "value"
+  )
 
 # Plot varmekart with text labels
 hmap_flu <- ggplot(
@@ -4023,6 +4017,44 @@ if (!is.na(subclade_color_col) && !is.null(virus_col) && "prove_tatt" %in% names
         p_combined,
         title = paste0(virus_label, " etter ", dim_label, " (antall + %)")
       )
+    }
+
+    landsdel_col <- if ("pasient_landsdel" %in% names(flu_v)) {
+      "pasient_landsdel"
+    } else if ("pasient_landsdel_from_fylke" %in% names(flu_v)) {
+      "pasient_landsdel_from_fylke"
+    } else {
+      NULL
+    }
+
+    if (!is.null(landsdel_col)) {
+      bar_plots <- build_subclade_landsdel_month_bars(
+        flu_v,
+        subtype_name = virus_key,
+        date_col = "prove_tatt",
+        subtype_col = virus_col,
+        landsdel_col = landsdel_col,
+        subclade_col = subclade_color_col,
+        title_prefix = "Pasient landsdel per måned og subklade",
+        palette_base = kvalitativ_comb,
+        top_n_subclades = 3,
+        facet_ncol = 2
+      )
+
+      if (!is.null(bar_plots$percent_plot)) {
+        export_graph_f <- save_plot_to_ppt(
+          export_graph_f,
+          bar_plots$percent_plot,
+          title = paste0(virus_label, " - Pasient landsdel per måned (andel)")
+        )
+      }
+      if (!is.null(bar_plots$count_plot)) {
+        export_graph_f <- save_plot_to_ppt(
+          export_graph_f,
+          bar_plots$count_plot,
+          title = paste0(virus_label, " - Pasient landsdel per måned (antall)")
+        )
+      }
     }
   }
 }

@@ -204,7 +204,10 @@ fhi_discrete_palette <- function(n, palette = kvalitativ_comb) {
 ## -------------------------
 ## FHI color palettes
 kvalitativ_a <- c("#ec7c73", "#40436d", "#61d2b2", "#a93c38", "#f9dc8c", "#7176c9", "#e0f0f7", "#09181f")
-kvalitativ_b <- c("#65a9c5", "#2a6a82", "#f0af5e", "#fee9e6", "#179463", "#c8e1ec")
+kvalitativ_b <- c(
+  "#65a9c5", "#2a6a82", "#f0af5e", "#fee9e6", "#179463", "#c8e1ec", "#40436d",
+  "#ec7c73", "#61d2b2", "#a93c38", "#f9dc8c", "#7176c9", "#e0f0f7", "#09181f"
+)
 kvalitativ_comb <- c(
   "#ec7c73", "#40436d", "#61d2b2", "#a93c38", "#f9dc8c", "#7176c9", "#e0f0f7",
   "#09181f", "#65a9c5", "#2a6a82", "#f0af5e", "#fee9e6", "#179463", "#c8e1ec"
@@ -639,6 +642,9 @@ build_metadata_counts <- function(df, x_var, fill_var) {
     ) %>%
     dplyr::filter(!is.na(xv), trimws(xv) != "", !is.na(fv), trimws(fv) != "")
   if (nrow(d) == 0) return(NULL)
+
+  d$landsdel_label <- normalize_norwegian_text(d$landsdel_label)
+  landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "S\u00F8rlandet", "\u00D8stlandet", "Ukjent")
   d
 }
 
@@ -807,6 +813,214 @@ build_group_distribution_plots <- function(
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
 
   list(percent_plot = p_pct, count_plot = p_count)
+}
+
+build_subclade_landsdel_month_heatmap <- function(
+  df,
+  subtype_name,
+  date_col = "prove_tatt",
+  subtype_col = "ngs_sekvens_resultat",
+  landsdel_col = "pasient_landsdel",
+  subclade_col = "nc_ha_subclade",
+  title_prefix = "Pasient landsdel x måned per subklade",
+  palette_base = kvantitativ_b1,
+  top_n_subclades = 7,
+  facet_ncol = 3
+) {
+  needed <- c(date_col, subtype_col, landsdel_col, subclade_col)
+  if (is.null(df) || !all(needed %in% names(df))) return(NULL)
+
+  d <- df %>%
+    dplyr::transmute(
+      subtype_label = as.character(.data[[subtype_col]]),
+      month_date = lubridate::floor_date(as.Date(.data[[date_col]]), "month"),
+      landsdel_label = normalize_landsdel_value(.data[[landsdel_col]]),
+      subclade_label = ifelse(
+        is.na(.data[[subclade_col]]) | trimws(as.character(.data[[subclade_col]])) == "",
+        "Ukjent",
+        trimws(as.character(.data[[subclade_col]]))
+      )
+    ) %>%
+    dplyr::filter(
+      subtype_label == subtype_name,
+      !is.na(month_date),
+      !is.na(landsdel_label),
+      landsdel_label != "",
+      !is.na(subclade_label),
+      subclade_label != ""
+    )
+
+  if (nrow(d) == 0) return(NULL)
+
+  top_subclades <- d %>%
+    dplyr::count(subclade_label, sort = TRUE) %>%
+    dplyr::slice_head(n = as.integer(top_n_subclades)) %>%
+    dplyr::pull(subclade_label)
+
+  d <- d %>%
+    dplyr::mutate(
+      subclade_plot = ifelse(subclade_label %in% top_subclades, subclade_label, "Andre")
+    ) %>%
+    dplyr::count(month_date, landsdel_label, subclade_plot, name = "n") %>%
+    dplyr::group_by(month_date, landsdel_label) %>%
+    dplyr::mutate(percent = 100 * n / sum(n, na.rm = TRUE)) %>%
+    dplyr::ungroup()
+
+  if (nrow(d) == 0) return(NULL)
+
+  landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "Sørlandet", "Østlandet", "Ukjent")
+  d$landsdel_label <- normalize_norwegian_text(d$landsdel_label)
+  d$landsdel_label <- normalize_norwegian_text(d$landsdel_label)
+  landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "S\u00F8rlandet", "\u00D8stlandet", "Ukjent")
+  landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "S\u00F8rlandet", "\u00D8stlandet", "Ukjent")
+  present_landsdel <- unique(d$landsdel_label)
+  ordered_landsdel <- c(intersect(landsdel_levels, present_landsdel), setdiff(sort(present_landsdel), landsdel_levels))
+  d$landsdel_label <- factor(d$landsdel_label, levels = ordered_landsdel)
+  d$subclade_plot <- factor(d$subclade_plot, levels = c(setdiff(sort(unique(d$subclade_plot)), "Andre"), if ("Andre" %in% d$subclade_plot) "Andre" else character(0)))
+
+  ggplot2::ggplot(
+    d,
+    ggplot2::aes(x = landsdel_label, y = month_date, fill = percent)
+  ) +
+    ggplot2::geom_tile(color = "white", linewidth = 0.2) +
+    ggplot2::facet_wrap(~subclade_plot, ncol = facet_ncol) +
+    ggplot2::scale_y_date(labels = format_month_label, date_breaks = "1 month", expand = c(0, 0)) +
+    ggplot2::scale_fill_gradientn(
+      colours = palette_base,
+      labels = scales::percent_format(scale = 1)
+    ) +
+    ggplot2::labs(
+      title = paste0(title_prefix, " - ", subtype_name),
+      subtitle = paste0(
+        "Top ", top_n_subclades, " subklader vises separat; ",
+        "andre subklader samles i 'Andre'"
+      ),
+      x = "Landsdel",
+      y = "Måned",
+      fill = "Andel av prøver (%)"
+    ) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 45, hjust = 1),
+      panel.grid = ggplot2::element_blank(),
+      strip.text = ggplot2::element_text(face = "bold"),
+      legend.position = "bottom"
+    )
+}
+
+build_subclade_landsdel_month_bars <- function(
+  df,
+  subtype_name,
+  date_col = "prove_tatt",
+  subtype_col = "ngs_sekvens_resultat",
+  landsdel_col = "pasient_landsdel",
+  subclade_col = "nc_ha_subclade",
+  title_prefix = "Pasient landsdel per måned og subklade",
+  palette_base = kvalitativ_comb,
+  top_n_subclades = 3,
+  facet_ncol = 2
+) {
+  needed <- c(date_col, subtype_col, landsdel_col, subclade_col)
+  if (is.null(df) || !all(needed %in% names(df))) return(NULL)
+
+  d <- df %>%
+    dplyr::transmute(
+      subtype_label = as.character(.data[[subtype_col]]),
+      month_date = lubridate::floor_date(as.Date(.data[[date_col]]), "month"),
+      landsdel_label = normalize_landsdel_value(.data[[landsdel_col]]),
+      subclade_label = ifelse(
+        is.na(.data[[subclade_col]]) | trimws(as.character(.data[[subclade_col]])) == "",
+        "Ukjent",
+        trimws(as.character(.data[[subclade_col]]))
+      )
+    ) %>%
+    dplyr::filter(
+      subtype_label == subtype_name,
+      !is.na(month_date),
+      !is.na(landsdel_label),
+      landsdel_label != "",
+      !is.na(subclade_label),
+      subclade_label != ""
+    )
+
+  if (nrow(d) == 0) return(NULL)
+
+  top_subclades <- d %>%
+    dplyr::count(subclade_label, sort = TRUE) %>%
+    dplyr::slice_head(n = as.integer(top_n_subclades)) %>%
+    dplyr::pull(subclade_label)
+
+  d <- d %>%
+    dplyr::mutate(
+      subclade_plot = ifelse(subclade_label %in% top_subclades, subclade_label, "Andre")
+    ) %>%
+    dplyr::count(month_date, landsdel_label, subclade_plot, name = "n") %>%
+    dplyr::group_by(month_date, landsdel_label) %>%
+    dplyr::mutate(percent = 100 * n / sum(n, na.rm = TRUE)) %>%
+    dplyr::ungroup()
+
+  if (nrow(d) == 0) return(NULL)
+
+  landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "Sørlandet", "Østlandet", "Ukjent")
+  present_landsdel <- unique(d$landsdel_label)
+  ordered_landsdel <- c(intersect(landsdel_levels, present_landsdel), setdiff(sort(present_landsdel), landsdel_levels))
+  d$landsdel_label <- factor(d$landsdel_label, levels = ordered_landsdel)
+
+  subclade_levels <- c(setdiff(sort(unique(d$subclade_plot)), "Andre"), if ("Andre" %in% d$subclade_plot) "Andre" else character(0))
+  d$subclade_plot <- factor(d$subclade_plot, levels = subclade_levels)
+
+  fill_values <- stats::setNames(
+    fhi_discrete_palette(length(levels(d$subclade_plot)), palette_base),
+    levels(d$subclade_plot)
+  )
+
+  p_percent <- ggplot2::ggplot(d, ggplot2::aes(x = month_date, y = percent, fill = subclade_plot)) +
+    ggplot2::geom_col(position = "stack") +
+    ggplot2::facet_wrap(~landsdel_label, ncol = facet_ncol) +
+    ggplot2::scale_x_date(labels = format_month_label, date_breaks = "1 month", expand = c(0, 0)) +
+    ggplot2::scale_y_continuous(labels = scales::percent_format(scale = 1), expand = c(0, 0)) +
+    ggplot2::scale_fill_manual(values = fill_values) +
+    ggplot2::labs(
+      title = paste0(title_prefix, " - ", subtype_name, " (andel)"),
+      subtitle = paste0("Top ", top_n_subclades, " subklader vises separat; resten samles i 'Andre'"),
+      x = "Måned",
+      y = "Andel av prøver (%)",
+      fill = "Subklade"
+    ) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 45, hjust = 1),
+      panel.grid.minor = ggplot2::element_blank(),
+      legend.position = "bottom"
+    )
+  p_percent <- p_percent + ggplot2::labs(x = "Måned", y = "Andel av prøver (%)")
+
+  p_percent <- p_percent + ggplot2::labs(x = "M\u00E5ned", y = "Andel av pr\u00F8ver (%)")
+
+  p_count <- ggplot2::ggplot(d, ggplot2::aes(x = month_date, y = n, fill = subclade_plot)) +
+    ggplot2::geom_col(position = "stack") +
+    ggplot2::facet_wrap(~landsdel_label, ncol = facet_ncol) +
+    ggplot2::scale_x_date(labels = format_month_label, date_breaks = "1 month", expand = c(0, 0)) +
+    ggplot2::scale_y_continuous(expand = c(0, 0)) +
+    ggplot2::scale_fill_manual(values = fill_values) +
+    ggplot2::labs(
+      title = paste0(title_prefix, " - ", subtype_name, " (antall)"),
+      subtitle = paste0("Top ", top_n_subclades, " subklader vises separat; resten samles i 'Andre'"),
+      x = "Måned",
+      y = "Antall (n)",
+      fill = "Subklade"
+    ) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 45, hjust = 1),
+      panel.grid.minor = ggplot2::element_blank(),
+      legend.position = "bottom"
+    )
+  p_count <- p_count + ggplot2::labs(x = "Måned")
+
+  p_count <- p_count + ggplot2::labs(x = "M\u00E5ned")
+
+  list(percent_plot = p_percent, count_plot = p_count)
 }
 
 # Two-season pie comparison helper:
@@ -1162,7 +1376,7 @@ build_ct_month_plot <- function(df, date_col, ct_col, color_col, title_txt, subt
     dplyr::filter(!is.na(month_date), !is.na(ct_value), is.finite(ct_value))
   if (nrow(d) == 0) return(NULL)
 
-  ggplot2::ggplot(
+  plot_obj <- ggplot2::ggplot(
     d,
     ggplot2::aes(
       x = month_date,
@@ -1185,6 +1399,10 @@ build_ct_month_plot <- function(df, date_col, ct_col, color_col, title_txt, subt
     ) +
     ggplot2::theme_minimal() +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+
+  return(plot_obj + ggplot2::labs(x = "M\u00E5ned"))
+
+  plot_obj + ggplot2::labs(x = "Måned")
 }
 
 prepare_run_qc_df <- function(df, run_col, cov_col, qc_col = NULL, virus_col = NULL, color_col = NULL) {
