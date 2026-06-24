@@ -56,6 +56,67 @@ required_packages <- c(
 )
 invisible(load_required_libraries(required_packages))
 invisible(timed_step("Source common report utilities", source("Source_files/common_report_utils.R")))
+plot_run_quality_stacked <- function(
+  run_quality_df,
+  y_var = c("percent", "n"),
+  title_txt = "Quality per run",
+  fill_label = "Status",
+  label_mode = c("both", "n", "percent"),
+  status_colors = NULL
+) {
+  y_var <- match.arg(y_var)
+  label_mode <- match.arg(label_mode)
+  if (is.null(run_quality_df) || nrow(run_quality_df) == 0) return(NULL)
+
+  d <- run_quality_df %>%
+    dplyr::count(run_id, run_quality_status, name = "n") %>%
+    dplyr::group_by(run_id) %>%
+    dplyr::mutate(percent = 100 * n / sum(n)) %>%
+    dplyr::ungroup() %>%
+    dplyr::mutate(
+      label_txt = if (label_mode == "n") {
+        paste0("n=", scales::comma(n))
+      } else if (label_mode == "percent") {
+        paste0("%=", round(percent, 1))
+      } else {
+        paste0("n=", scales::comma(n), "\n%=", round(percent, 1))
+      }
+    )
+
+  if (is.null(status_colors)) {
+    status_levels <- unique(as.character(d$run_quality_status))
+    if (all(c("Passed", "Not passed") %in% status_levels)) {
+      status_colors <- c("Passed" = "#179463", "Not passed" = "#d74b46")
+    } else if (all(c("Submitted", "Not submitted") %in% status_levels)) {
+      status_colors <- c("Submitted" = "#179463", "Not submitted" = "#d74b46")
+    } else {
+      status_colors <- stats::setNames(
+        fhi_discrete_palette(length(status_levels), kvalitativ_comb),
+        status_levels
+      )
+    }
+  }
+
+  ggplot2::ggplot(d, ggplot2::aes(x = run_id, y = .data[[y_var]], fill = run_quality_status)) +
+    ggplot2::geom_col(position = "stack") +
+    ggplot2::geom_text(
+      ggplot2::aes(label = ifelse(n > 0, label_txt, "")),
+      position = ggplot2::position_stack(vjust = 0.5),
+      size = 2.8,
+      lineheight = 0.9
+    ) +
+    ggplot2::scale_fill_manual(values = status_colors, drop = FALSE) +
+    ggplot2::labs(
+      title = title_txt,
+      x = "NGS run id",
+      y = ifelse(y_var == "percent", "Andel (%)", "Antall (n)"),
+      fill = fill_label
+    ) +
+    {if (y_var == "percent") ggplot2::scale_y_continuous(labels = scales::percent_format(scale = 1), limits = c(0, 100)) else ggplot2::scale_y_continuous()} +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+}
+
 
 Sys.setlocale("LC_TIME", "nb_NO.utf8")
 export_graph_f <- read_pptx()
@@ -66,6 +127,66 @@ axis_share_label <- "Andel (%)"
 
 fhi_text_dark <- tail(kvantitativ_b1, 1)
 fhi_text_mid <- kvantitativ_b1[ceiling(length(kvantitativ_b1) / 2)]
+
+flu_reportable_subtypes <- c("A/H1N1", "A/H3N2", "B/Victoria")
+flu_subtype_short_labels <- c(
+  "A/H1N1" = "H1",
+  "A/H3N2" = "H3",
+  "B/Victoria" = "BVIC"
+)
+flu_subtype_sheet_stubs <- c(
+  "A/H1N1" = "H1",
+  "A/H3N2" = "H3",
+  "B/Victoria" = "BVic"
+)
+# PowerPoint export wrappers keep slide titles close to each output call and
+# make the report flow easier to trace when we compare code against slides.
+normalize_slide_title <- function(title_value, fallback_title) {
+  if (is.null(title_value) || length(title_value) == 0) {
+    return(fallback_title)
+  }
+
+  title_chr <- trimws(paste(as.character(title_value), collapse = " "))
+  if (!nzchar(title_chr) || identical(title_chr, "NULL")) {
+    return(fallback_title)
+  }
+
+  title_chr
+}
+
+add_section_output <- function(presentation, section_title, section_subtitle = NULL) {
+  add_section_slide(presentation, section_title, section_subtitle)
+}
+
+add_table_output <- function(presentation, table_obj, slide_title = NULL, title = NULL) {
+  if (is.null(table_obj)) {
+    return(presentation)
+  }
+
+  resolved_title <- normalize_slide_title(
+    if (!is.null(slide_title)) slide_title else title,
+    "Tabell uten tittel"
+  )
+  save_table_to_ppt(presentation, table_obj, resolved_title)
+}
+
+add_plot_output <- function(presentation, plot_obj, slide_title = NULL, title = NULL) {
+  if (is.null(plot_obj)) {
+    return(presentation)
+  }
+
+  resolved_title <- slide_title
+  if (is.null(resolved_title) || length(resolved_title) == 0) {
+    resolved_title <- title
+  }
+  if (is.null(resolved_title) || length(resolved_title) == 0) {
+    plot_label_title <- tryCatch(plot_obj$labels$title, error = function(e) NULL)
+    resolved_title <- plot_label_title
+  }
+  resolved_title <- normalize_slide_title(resolved_title, "Figur uten tittel")
+
+  save_plot_to_ppt(presentation, plot_obj, title = resolved_title)
+}
 
 # ==============================================================================
 # Functions
@@ -157,6 +278,80 @@ invisible(timed_step("Run FLuDB QC checks", source(file.path(bundle_scripts_dir,
 season_info <- current_and_previous_seasons(Sys.Date())
 current_season_label <- season_info$current_label
 previous_season_label <- season_info$previous_label
+
+format_presentation_season <- function(season_label) {
+  season_chr <- as.character(season_label)
+  if (grepl("^Season[0-9]{2}_[0-9]{2}$", season_chr)) {
+    season_parts <- stringr::str_match(season_chr, "^Season([0-9]{2})_([0-9]{2})$")
+    return(paste0("Sesong 20", season_parts[, 2], "/", season_parts[, 3]))
+  }
+  season_chr
+}
+
+format_mutation_panel_title <- function(column_name) {
+  gene_map <- c(
+    nc_ha = "HA",
+    nc_na = "NA",
+    nc_m1 = "M1",
+    nc_m2 = "M2",
+    nc_pa = "PA",
+    nc_pb1 = "PB1",
+    nc_pb2 = "PB2",
+    nc_np = "NP",
+    nc_ns = "NS"
+  )
+  type_map <- c(
+    frameshift = "frameshift",
+    insertion = "insersjoner",
+    deletion = "delesjoner"
+  )
+
+  gene_key <- stringr::str_extract(column_name, "^nc_[a-z0-9]+")
+  type_key <- stringr::str_extract(column_name, "(frameshift|insertion|deletion)$")
+  gene_label <- unname(gene_map[gene_key])
+  type_label <- unname(type_map[type_key])
+
+  if (is.na(gene_label) || is.na(type_label)) {
+    return(gsub("_", " ", column_name))
+  }
+
+  paste0(gene_label, ": andel ", type_label, " over tid per influensasubtype")
+}
+
+normalize_mutation_site_label <- function(x) {
+  x <- as.character(x)
+  x <- stringr::str_replace_all(x, regex("^No aaInsertions$", ignore_case = TRUE), "Ingen aminosyreinsersjoner")
+  x <- stringr::str_replace_all(x, regex("^No aaDeletions$", ignore_case = TRUE), "Ingen aminosyredelesjoner")
+  x <- stringr::str_replace_all(x, regex("^No frameShifts$", ignore_case = TRUE), "Ingen frameshift")
+  x
+}
+
+apply_gene_gisaid_status <- function(run_quality_df, source_df, gisaid_col) {
+  if (is.null(run_quality_df) || nrow(run_quality_df) == 0) return(NULL)
+  if (is.na(gisaid_col) || !(gisaid_col %in% names(source_df))) return(NULL)
+  if (!("key" %in% names(run_quality_df)) || !("key" %in% names(source_df))) return(NULL)
+
+  gisaid_status_df <- source_df %>%
+    dplyr::transmute(
+      key,
+      gisaid_gene_id = trimws(as.character(.data[[gisaid_col]]))
+    ) %>%
+    dplyr::mutate(
+      gisaid_gene_id = ifelse(is.na(gisaid_gene_id), "", gisaid_gene_id),
+      run_quality_status = ifelse(gisaid_gene_id != "", "Submitted", "Not submitted"),
+      run_quality_reason = ifelse(gisaid_gene_id != "", "Has_GISAID_gene_id", "Missing_GISAID_gene_id")
+    ) %>%
+    dplyr::distinct(key, .keep_all = TRUE)
+
+  run_quality_df %>%
+    dplyr::select(-dplyr::any_of(c("run_quality_status", "run_quality_reason"))) %>%
+    dplyr::left_join(gisaid_status_df, by = "key") %>%
+    dplyr::mutate(
+      run_quality_status = ifelse(is.na(run_quality_status), "Not submitted", run_quality_status),
+      run_quality_reason = ifelse(is.na(run_quality_reason), "Missing_GISAID_gene_id", run_quality_reason),
+      run_quality_status = factor(run_quality_status, levels = c("Submitted", "Not submitted"))
+    )
+}
 
 signature_script_path <- file.path("Source_files", "Subclade_mutations_INF.ps1")
 signature_map_results_path <- file.path("Results", "Subclade_mutations_INF.csv")
@@ -323,7 +518,7 @@ fludb$mut_ha1_without_subclade_signature <- mapply(
 
 reportable_subtype_fludb <- fludb %>%
   filter(
-    ngs_sekvens_resultat %in% c("A/H1N1", "A/H3N2", "B/Victoria"),
+    ngs_sekvens_resultat %in% flu_reportable_subtypes,
     !(is.na(tessy_reportable_variable) |
       tessy_reportable_variable == "" |
       tessy_reportable_variable == "NA" |
@@ -348,12 +543,13 @@ clade_subclade_fludb <- reportable_subtype_fludb %>%
 # ==============================================================================
 # Data completeness and issues (SC2-style first section)
 # ==============================================================================
-export_graph_f <- add_section_slide(
+export_graph_f <- add_section_output(
   export_graph_f,
   "Seksjon: Data completeness og issues",
   "Datakompletthet, kvalitetsavvik og standardisert pasientmetadata"
 )
 
+# Output: QC overview tables for metadata completeness and detected data issues.
 patient_metadata_columns <- c(
   "prove_tatt", "month_year", "week_year", "year",
   "pasient_alder", "pasient_aldersgruppe",
@@ -380,7 +576,7 @@ data_completeness_tbl <- tibble(
 ) %>%
   arrange(desc(missing_pct), desc(missing_n))
 
-export_graph_f <- save_table_to_ppt(
+export_graph_f <- add_table_output(
   export_graph_f,
   data_completeness_tbl,
   "Datakompletthet for standardiserte pasientmetadata-kolonner"
@@ -423,17 +619,18 @@ issues_tbl <- tibble(
   value = as.numeric(unlist(issue_counts))
 )
 
-export_graph_f <- save_table_to_ppt(
+export_graph_f <- add_table_output(
   export_graph_f,
   issues_tbl,
-  "Data issues (QC-avvik) for pasientmetadata og dekning"
+  "QC-avvik for pasientmetadata og dekning"
 )
 
+# Output: subtype/subclade coverage slides mirror the SC2 deck structure.
 # Coverage by subtype and subclade (requested SC2-like coverage view)
 if (!is.na(cov_col)) {
   coverage_subclade_df <- fludb %>%
     filter(
-      ngs_sekvens_resultat %in% c("A/H1N1", "A/H3N2", "B/Victoria"),
+      ngs_sekvens_resultat %in% flu_reportable_subtypes,
       !is.na(nc_ha_subclade), nc_ha_subclade != ""
     ) %>%
     mutate(
@@ -462,7 +659,7 @@ if (!is.na(cov_col)) {
       theme_minimal() +
       theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
 
-    export_graph_f <- save_plot_to_ppt(export_graph_f, coverage_box_plot)
+    export_graph_f <- add_plot_output(export_graph_f, coverage_box_plot)
 
     coverage_trend_plot <- coverage_subclade_df %>%
       group_by(month_date, ngs_sekvens_resultat, nc_ha_subclade) %>%
@@ -482,24 +679,26 @@ if (!is.na(cov_col)) {
       theme_minimal() +
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-    export_graph_f <- save_plot_to_ppt(export_graph_f, coverage_trend_plot)
+    export_graph_f <- add_plot_output(export_graph_f, coverage_trend_plot)
   }
 }
 
 # Kvalitetsvurdering per run (standardisert bestått/ikke bestått)
+# Output: one gene-specific slide set per recent run-quality panel.
 run_quality_map_flu <- resolve_run_quality_mapping("INF", fludb)
 flu_gene_coverage_cols <- flu_run_quality_gene_columns(fludb)
 if (length(flu_gene_coverage_cols) > 0 && !is.na(run_quality_map_flu$run_col) && !is.na(run_quality_map_flu$date_col)) {
-  export_graph_f <- add_section_slide(
+  export_graph_f <- add_section_output(
     export_graph_f,
-    "Seksjon: Kvalitet per run",
-    "Siste 12 relevante runs, ett gen per lysbildesett, subtypefarger i dekningsplottene"
+    "Seksjon: GISAID-submisjon per run",
+    "Siste 12 relevante runs, ett gen per lysbildesett, status basert på gen-spesifikk GISAID-ID"
   )
 
   for (gene_cov_col in flu_gene_coverage_cols) {
     run_quality_map_gene <- run_quality_map_flu
     run_quality_map_gene$cov_col <- gene_cov_col
     gene_label <- format_flu_gene_label(gene_cov_col)
+    gisaid_col <- flu_gene_gisaid_column(gene_cov_col)
 
     run_quality_gene <- prepare_run_quality_dataset(
       fludb,
@@ -510,31 +709,46 @@ if (length(flu_gene_coverage_cols) > 0 && !is.na(run_quality_map_flu$run_col) &&
     )
 
     if (is.null(run_quality_gene) || nrow(run_quality_gene) == 0) next
+    run_quality_gene <- apply_gene_gisaid_status(run_quality_gene, fludb, gisaid_col)
+    if (is.null(run_quality_gene) || nrow(run_quality_gene) == 0) next
 
-    run_cov_summary_gene <- run_quality_summary_table(run_quality_gene)
+    run_cov_summary_gene <- run_quality_gene %>%
+      dplyr::group_by(run_id) %>%
+      dplyr::summarise(
+        n_samples = dplyr::n(),
+        mean_coverage = round(mean(run_quality_coverage_norm, na.rm = TRUE), 3),
+        median_coverage = round(median(run_quality_coverage_norm, na.rm = TRUE), 3),
+        submitted_n = sum(run_quality_status == "Submitted", na.rm = TRUE),
+        not_submitted_n = sum(run_quality_status == "Not submitted", na.rm = TRUE),
+        submitted_pct = round(100 * submitted_n / n_samples, 1),
+        .groups = "drop"
+      ) %>%
+      dplyr::arrange(dplyr::desc(submitted_pct), dplyr::desc(median_coverage), dplyr::desc(n_samples), run_id)
     if (!is.null(run_cov_summary_gene) && nrow(run_cov_summary_gene) > 0) {
-      export_graph_f <- save_table_to_ppt(
+      export_graph_f <- add_table_output(
         export_graph_f,
         run_cov_summary_gene,
-        paste("Kvalitetssammendrag -", gene_label)
+        paste("GISAID-submisjonssammendrag -", gene_label)
       )
     }
 
     p_run_pct_gene <- plot_run_quality_stacked(
       run_quality_gene,
       y_var = "percent",
-      title_txt = paste("Kvalitet per run andel -", gene_label),
-      fill_label = "Status"
+      title_txt = paste("GISAID-submisjon per run andel -", gene_label),
+      fill_label = "GISAID-status",
+      label_mode = "percent"
     )
-    if (!is.null(p_run_pct_gene)) export_graph_f <- save_plot_to_ppt(export_graph_f, p_run_pct_gene)
+    if (!is.null(p_run_pct_gene)) export_graph_f <- add_plot_output(export_graph_f, p_run_pct_gene)
 
     p_run_n_gene <- plot_run_quality_stacked(
       run_quality_gene,
       y_var = "n",
-      title_txt = paste("Kvalitet per run antall -", gene_label),
-      fill_label = "Status"
+      title_txt = paste("GISAID-submisjon per run antall -", gene_label),
+      fill_label = "GISAID-status",
+      label_mode = "n"
     )
-    if (!is.null(p_run_n_gene)) export_graph_f <- save_plot_to_ppt(export_graph_f, p_run_n_gene)
+    if (!is.null(p_run_n_gene)) export_graph_f <- add_plot_output(export_graph_f, p_run_n_gene)
 
     p_run_cov_gene <- plot_run_quality_coverage_box_grouped(
       run_quality_gene,
@@ -543,7 +757,7 @@ if (length(flu_gene_coverage_cols) > 0 && !is.na(run_quality_map_flu$run_col) &&
       color_label = "Undertype",
       color_values = flu_subtype_palette()
     )
-    if (!is.null(p_run_cov_gene)) export_graph_f <- save_plot_to_ppt(export_graph_f, p_run_cov_gene)
+    if (!is.null(p_run_cov_gene)) export_graph_f <- add_plot_output(export_graph_f, p_run_cov_gene)
   }
 }
 
@@ -555,8 +769,8 @@ if (length(flu_gene_coverage_cols) == 0) {
 
 # CT values per subtype (one plot per slide, colored by subclade)
 if (length(ct_columns) > 0) {
-  subtype_order <- c("A/H1N1", "A/H3N2", "B/Victoria")
-  subtype_short <- c("A/H1N1" = "H1", "A/H3N2" = "H3", "B/Victoria" = "BVIC")
+  subtype_order <- flu_reportable_subtypes
+  subtype_short <- flu_subtype_short_labels
   subtype_ct_column <- c("A/H1N1" = "pcr_h1_ct", "A/H3N2" = "pcr_h3_ct", "B/Victoria" = "pcr_bvic_ct")
 
   for (subtype_name in subtype_order) {
@@ -634,7 +848,7 @@ if (length(ct_columns) > 0) {
       )
     }
 
-    export_graph_f <- save_plot_to_ppt(
+    export_graph_f <- add_plot_output(
       export_graph_f,
       ct_month_plot,
       title = paste("Ct-verdier per måned -", subtype_short[[subtype_name]])
@@ -651,7 +865,7 @@ excel_export_sheets[["data_issues"]] <- issues_tbl
 # Sample tables from fludb
 # ==============================================================================
 
-export_graph_f <- add_section_slide(
+export_graph_f <- add_section_output(
   export_graph_f,
   "Seksjon: Prøvetabeller",
   "Sammendragstabeller beregnet direkte fra fludb"
@@ -672,7 +886,7 @@ prove_cat <- fludb %>%
   count(name = "n") %>%
   pivot_wider(names_from = prove_kategori, values_from = n)
 
-export_graph_f <- save_table_to_ppt(
+export_graph_f <- add_table_output(
   export_graph_f,
   prove_cat,
   "Prøvekategori etter pasientstatus"
@@ -697,10 +911,10 @@ prove_cat_m_long <- fludb %>%
 prove_cat_m <- prove_cat_m_long %>%
   pivot_wider(names_from = month_year, values_from = n, values_fill = 0)
 
-export_graph_f <- save_table_to_ppt(
+export_graph_f <- add_table_output(
   export_graph_f,
   prove_cat_m,
-  "Prøvekategori per måned etter pasientstatus"
+  "Prøvekategori per måned etter pasientstatus (tabell)"
 )
 
 
@@ -739,7 +953,11 @@ prove_cat_m_plot <- prove_cat_m_long %>%
     legend.position = "bottom"
   )
 
-export_graph_f <- save_plot_to_ppt(export_graph_f, prove_cat_m_plot)
+export_graph_f <- add_plot_output(
+  export_graph_f,
+  prove_cat_m_plot,
+  title = "Prøvekategori per måned etter pasientstatus (andel)"
+)
 
 # Add varmekart companion for "Prøvekategori per måned etter pasientstatus".
 prove_cat_m_heat <- prove_cat_m_long %>%
@@ -771,7 +989,7 @@ prove_cat_m_heat <- prove_cat_m_long %>%
     legend.position = "bottom"
   )
 
-export_graph_f <- save_plot_to_ppt(
+export_graph_f <- add_plot_output(
   export_graph_f,
   prove_cat_m_heat,
   title = "Prøvekategori per måned etter pasientstatus (varmekart)"
@@ -781,7 +999,7 @@ export_graph_f <- save_plot_to_ppt(
 # Influenza frequency dataset from fludb
 # ==============================================================================
 
-export_graph_f <- add_section_slide(
+export_graph_f <- add_section_output(
   export_graph_f,
   "Seksjon: Influensafrekvens",
   "Frekvenstabeller og månedlige subtypeoppsummeringer"
@@ -891,7 +1109,7 @@ frequency_table_df <- frequency_table_df %>%
 
 # Get total rows by subtype
 frequency_subtype_reference <- frequency_table_df %>%
-  filter(`WHO/ECDC kategori` %in% c("A/H1N1", "A/H3N2", "B/Victoria")) %>%
+  filter(`WHO/ECDC kategori` %in% flu_reportable_subtypes) %>%
   select(`WHO/ECDC kategori`, all_of(sorted_months))
 
 # Map each WHO/ECDC category back to its subtype total for percentage calculations.
@@ -941,129 +1159,21 @@ recent_months <- tail(sorted_months, 3)
 frequency_table_ppt_df <- frequency_table_df %>%
   select(`WHO/ECDC kategori`, Klade, Subklade, all_of(recent_months), Totalt)
 
-# Create flextable
-freqt_flextable <- flextable(frequency_table_ppt_df) %>%
-  autofit()
 
 # Save the table to PowerPoint
-export_graph_f <- save_table_to_ppt(
+export_graph_f <- add_table_output(
   export_graph_f,
   frequency_table_ppt_df,
   "Frekvenstabell for WHO/ECDC-kategorier, klader og subklader"
 )
 
-# ==============================================================================
-# Monthly subtype count charts from fludb-derived clade_count
-# ==============================================================================
-
-clade_count <- frequency_clade_count
-
-# Ensure month_year is Date
-clade_count$month_year <- as.Date(
-  paste0("01-", clade_count$month_year),
-  format = "%d-%b-%Y"
-)
-
-# Set locale to Norwegian Bokmål
-Sys.setlocale("LC_TIME", "nb_NO.UTF-8")
-
-# Filter from Feb 2022 onward
-clade_filtered <- clade_count %>%
-  filter(month_year >= as.Date("2022-02-01"))
-
-# Duplicate overview plots removed in favor of the dedicated subtype section below.
-unique_seq <- character(0)
-
-# Loop and create combined graphs
-for (seq_name in unique_seq) {
-  # ----- CLADE PLOT -----
-
-  df_clade <- clade_filtered %>%
-    filter(ngs_sekvens_resultat == seq_name) %>%
-    group_by(month_year, nc_ha_clade) %>%
-    summarise(n = sum(n), .groups = "drop") %>%
-    group_by(month_year) %>%
-    mutate(percent = n / sum(n) * 100) %>%
-    ungroup()
-
-  p_clade <- ggplot(
-    df_clade,
-    aes(x = month_year, y = percent, fill = nc_ha_clade)
-  ) +
-    geom_area() + # Change from geom_bar to geom_area for stacked area chart
-    scale_fill_manual(values = kvalitativ_a, name = NULL) + # Remove legend title
-    scale_x_date(
-      date_breaks = "1 month",
-      labels = format_month_label,
-      expand = c(0, 0)
-    ) +
-    theme_minimal() +
-    theme(
-      axis.text.x = element_text(angle = 45, hjust = 1, size = 12), # Increase x-axis text size
-      legend.title = element_blank() # Ensure no legend title
-    ) +
-    labs(title = "Klade", x = "", y = axis_share_label)
-
-  # ----- SUBCLADE PLOT -----
-
-  # Prepare the subclade data
-  df_subclade <- clade_filtered %>%
-    filter(ngs_sekvens_resultat == seq_name) %>%
-    group_by(month_year, nc_ha_subclade) %>%
-    summarise(n = sum(n), .groups = "drop") %>%
-    group_by(month_year) %>%
-    mutate(percent = n / sum(n) * 100) %>%
-    ungroup()
-
-  # Plotting
-  p_subclade <- ggplot(
-    df_subclade,
-    aes(x = month_year, y = percent, fill = nc_ha_subclade)
-  ) +
-    geom_area(position = "fill") + # Use "fill" to normalize stacking
-    scale_fill_manual(values = kvalitativ_a, name = NULL) + # Adjust color scale
-    scale_x_date(
-      date_breaks = "1 month",
-      labels = format_month_label,
-      expand = c(0, 0)
-    ) +
-    theme_minimal() +
-    theme(
-      axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
-      legend.title = element_blank()
-    ) +
-    labs(title = "Subklade", x = "", y = axis_share_label)
-
-  # Display the plot
-
-  # ----- COMBINE AND EXPORT -----
-
-  combined_plot <- p_clade /
-    p_subclade +
-    plot_layout(heights = c(1, 1)) +
-    plot_annotation(
-      title = paste("Fordeling av klade og subklade per måned:", seq_name)
-    )
-
-  export_graph_f <- save_plot_to_ppt(export_graph_f, combined_plot)
-}
-
-
-# Remove all temporary data frames
-rm(
-  frequency_clade_count,
-  frequency_subtype_totals,
-  frequency_clade_pivot,
-  frequency_subtype_pivot,
-  frequency_subtype_reference
-)
 
 
 # ==============================================================================
 # Clade and subclade plots from fludb-derived clade_subclade_fludb
 # ==============================================================================
 
-export_graph_f <- add_section_slide(
+export_graph_f <- add_section_output(
   export_graph_f,
   "Seksjon: Klade- og subkladeplott",
   "Sesongfordeling, månedsplott og arealdiagrammer per subtype"
@@ -1105,142 +1215,11 @@ order_month_year <- function(data) {
   return(data)
 }
 
-# Prepare subtype-specific clade/subclade datasets.
-df_h1n1 <- clade_subclade_fludb %>%
-  filter(ngs_sekvens_resultat == "A/H1N1")
-
-df_h3n2 <- clade_subclade_fludb %>%
-  filter(ngs_sekvens_resultat == "A/H3N2")
-
-df_bvic <- clade_subclade_fludb %>%
-  filter(ngs_sekvens_resultat == "B/Victoria")
-
-# ==============================================================================
-# Clade and subclade season summaries from fludb-derived clade_subclade_fludb
-# ==============================================================================
-
-# Function to summarize by clade and subclade for each subtype
-summarize_by_clade_subclade <- function(df) {
-  clade_summary <- df %>%
-    group_by(nc_ha_clade) %>%
-    summarize(count = n(), .groups = "drop")
-
-  subclade_summary <- df %>%
-    group_by(nc_ha_subclade) %>%
-    summarize(count = n(), .groups = "drop")
-
-  return(list(
-    clade_summary = clade_summary,
-    subclade_summary = subclade_summary
-  ))
-}
-
-# Summarize data
-h1n1_summary <- summarize_by_clade_subclade(df_h1n1)
-h3n2_summary <- summarize_by_clade_subclade(df_h3n2)
-bvic_summary <- summarize_by_clade_subclade(df_bvic)
-
-# Function to create pie charts for clade and subclade with custom colors
-create_combined_pie_chart <- function(
-  clade_summary,
-  subclade_summary,
-  type,
-  palette
-) {
-  total_n <- sum(clade_summary$count, na.rm = TRUE)
-  season_tag <- paste0("current season (n=", total_n, ")")
-  clade_chart <- ggplot(
-    clade_summary,
-    aes(x = "", y = count, fill = nc_ha_clade)
-  ) +
-    geom_bar(stat = "identity", width = 1) +
-    coord_polar(theta = "y") +
-    scale_fill_manual(
-      values = kvalitativ_comb,
-      labels = paste0(clade_summary$nc_ha_clade, " (n=", clade_summary$count, ")")
-    ) +
-    labs(fill = "Klade") +
-    theme_void() +
-    ggtitle(paste(type, "Fordeling av klade -", season_tag))
-
-  subclade_chart <- ggplot(
-    subclade_summary,
-    aes(x = "", y = count, fill = nc_ha_subclade)
-  ) +
-    geom_bar(stat = "identity", width = 1) +
-    coord_polar(theta = "y") +
-    scale_fill_manual(
-      values = kvalitativ_comb,
-      labels = paste0(subclade_summary$nc_ha_subclade, " (n=", subclade_summary$count, ")")
-    ) +
-    labs(fill = "Subklade") +
-    theme_void() +
-    ggtitle(paste(type, "Fordeling av subklade -", season_tag))
-
-  # Combine the charts using patchwork
-  combined_chart <- clade_chart / subclade_chart
-  return(combined_chart)
-}
-
-# Create combined pie charts for each subtype using kvalitativ_a for colors
-h1n1_combined_chart <- create_combined_pie_chart(
-  h1n1_summary$clade_summary,
-  h1n1_summary$subclade_summary,
-  "A/H1N1",
-  kvalitativ_a
-)
-h3n2_combined_chart <- create_combined_pie_chart(
-  h3n2_summary$clade_summary,
-  h3n2_summary$subclade_summary,
-  "A/H3N2",
-  kvalitativ_a
-)
-bvic_combined_chart <- create_combined_pie_chart(
-  bvic_summary$clade_summary,
-  bvic_summary$subclade_summary,
-  "B/Victoria",
-  kvalitativ_a
-)
-
-
-# Removed duplicate subtype pie slides; keep single canonical subtype sections later.
+# Prepare subtype-specific clade/subclade datasets for both bar and area plots.
 
 # ==============================================================================
 # Monthly clade and subclade bar charts from fludb-derived clade_subclade_fludb
 # ==============================================================================
-
-df_h1n1_clade_percentage <- create_grouped_df_with_percentage(
-  df_h1n1,
-  "nc_ha_clade"
-) %>%
-  order_month_year()
-df_h1n1_subclade_percentage <- create_grouped_df_with_percentage(
-  df_h1n1,
-  "nc_ha_subclade"
-) %>%
-  order_month_year()
-
-df_h3n2_clade_percentage <- create_grouped_df_with_percentage(
-  df_h3n2,
-  "nc_ha_clade"
-) %>%
-  order_month_year()
-df_h3n2_subclade_percentage <- create_grouped_df_with_percentage(
-  df_h3n2,
-  "nc_ha_subclade"
-) %>%
-  order_month_year()
-
-df_bvic_clade_percentage <- create_grouped_df_with_percentage(
-  df_bvic,
-  "nc_ha_clade"
-) %>%
-  order_month_year()
-df_bvic_subclade_percentage <- create_grouped_df_with_percentage(
-  df_bvic,
-  "nc_ha_subclade"
-) %>%
-  order_month_year()
 
 # Function to create a bar chart for a given dataset and grouping column
 create_bar_chart <- function(data, title, legend_title, remove_x_axis = FALSE) {
@@ -1279,7 +1258,7 @@ create_bar_chart <- function(data, title, legend_title, remove_x_axis = FALSE) {
     p <- p + theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))
   }
 
-  return(p)
+  p
 }
 
 # Combine clade and subclade data into a single dataframe
@@ -1297,33 +1276,11 @@ combine_clade_subclade <- function(
     mutate(Type = "Subklade", Group = !!sym(subclade_col)) %>%
     select(month_year, percentage, Type, Group)
 
-  combined_df <- bind_rows(clade_df, subclade_df)
-  return(combined_df)
+  bind_rows(clade_df, subclade_df)
 }
-
-# Prepare combined dataframes
-df_h1n1_combined <- combine_clade_subclade(
-  df_h1n1_clade_percentage,
-  df_h1n1_subclade_percentage,
-  "nc_ha_clade",
-  "nc_ha_subclade"
-)
-df_h3n2_combined <- combine_clade_subclade(
-  df_h3n2_clade_percentage,
-  df_h3n2_subclade_percentage,
-  "nc_ha_clade",
-  "nc_ha_subclade"
-)
-df_bvic_combined <- combine_clade_subclade(
-  df_bvic_clade_percentage,
-  df_bvic_subclade_percentage,
-  "nc_ha_clade",
-  "nc_ha_subclade"
-)
 
 # Create clade and subclade charts separately, then combine
 create_combined_chart <- function(df_combined, type) {
-  # Create clade chart with the specified palette
   clade_chart <- create_bar_chart(
     df_combined %>% filter(Type == "Klade"),
     paste(type, "fordeling av klade per måned:"),
@@ -1332,27 +1289,15 @@ create_combined_chart <- function(df_combined, type) {
   ) +
     scale_fill_manual(values = kvalitativ_a)
 
-  # Create subclade chart with the specified palette
   subclade_chart <- create_bar_chart(
     df_combined %>% filter(Type == "Subklade"),
     paste(type, "fordeling av subklade per måned:"),
     legend_title = "Subklade"
   ) +
     scale_fill_manual(values = kvalitativ_b)
-  # Combine the charts
-  combined_chart <- clade_chart / subclade_chart
-  return(combined_chart)
+
+  clade_chart / subclade_chart
 }
-
-# Create combined charts
-h1n1_combined_chart <- create_combined_chart(df_h1n1_combined, "A/H1N1")
-h3n2_combined_chart <- create_combined_chart(df_h3n2_combined, "A/H3N2")
-bvic_combined_chart <- create_combined_chart(df_bvic_combined, "B/Victoria")
-
-export_graph_f <- save_plot_to_ppt(export_graph_f, h1n1_combined_chart)
-export_graph_f <- save_plot_to_ppt(export_graph_f, h3n2_combined_chart)
-export_graph_f <- save_plot_to_ppt(export_graph_f, bvic_combined_chart)
-
 
 # ==============================================================================
 # Monthly clade and subclade area charts from fludb-derived clade_subclade_fludb
@@ -1365,39 +1310,26 @@ fill_missing_months <- function(data, group_col) {
     distinct() %>%
     tidyr::expand(month_year, !!sym(group_col)) %>%
     left_join(data, by = c("month_year", as.character(sym(group_col)))) %>%
-    replace_na(list(percentage = 0)) # Fill missing percentages with 0
+    replace_na(list(percentage = 0))
 
-  return(complete_data)
+  complete_data
 }
 
-
-# Apply function to fill missing months for clade and subclade percentages
-df_h1n1_clade_filled <- fill_missing_months(df_h1n1_clade_percentage, "nc_ha_clade")
-df_h1n1_subclade_filled <- fill_missing_months(df_h1n1_subclade_percentage, "nc_ha_subclade")
-
-
-df_h3n2_clade_filled <- fill_missing_months(df_h3n2_clade_percentage, "nc_ha_clade")
-df_h3n2_subclade_filled <- fill_missing_months(df_h3n2_subclade_percentage, "nc_ha_subclade")
-
-df_bvic_clade_filled <- fill_missing_months(df_bvic_clade_percentage, "nc_ha_clade")
-df_bvic_subclade_filled <- fill_missing_months(df_bvic_subclade_percentage, "nc_ha_subclade")
-
 create_stacked_area_chart <- function(data, title, group_col, legend_title, palette) {
-  # Reuse the same plotting logic for clade and subclade area charts.
   p <- ggplot(
     data,
     aes(
       x = as.Date(as.character(month_year)),
       y = percentage,
-      fill = !!sym(group_col) # Reference actual column for mapping
+      fill = !!sym(group_col)
     )
   ) +
     geom_area(position = "stack") +
     labs(
       title = title,
       x = NULL,
-      y = axis_share_label, # Label for y axis
-      fill = legend_title # Custom label for legend
+      y = axis_share_label,
+      fill = legend_title
     ) +
     theme_minimal() +
     theme(
@@ -1413,68 +1345,103 @@ create_stacked_area_chart <- function(data, title, group_col, legend_title, pale
     ) +
     scale_fill_manual(values = palette)
 
-  return(p)
+  p
 }
 
-# Call the function with the desired legend titles
 create_combined_area_chart <- function(clade_data, subclade_data, type, clade_palette, subclade_palette) {
-  # Stack the clade and subclade charts vertically for a subtype-specific summary.
-  # Create clade area chart
   clade_area_chart <- create_stacked_area_chart(
     clade_data,
     paste(type, "Klade fordeling per måned:"),
-    group_col = "nc_ha_clade", # Pass the actual column name
-    legend_title = "Klade", # Set legend title as "Klade"
+    group_col = "nc_ha_clade",
+    legend_title = "Klade",
     palette = clade_palette
   )
 
-  # Create subclade area chart
   subclade_area_chart <- create_stacked_area_chart(
     subclade_data,
     paste(type, "Subklade fordeling per måned:"),
-    group_col = "nc_ha_subclade", # Pass the actual column name
-    legend_title = "Subklade", # Set legend title as "Subklade"
+    group_col = "nc_ha_subclade",
+    legend_title = "Subklade",
     palette = subclade_palette
   )
 
-  # Combine the area charts using patchwork
-  combined_area_chart <- clade_area_chart / subclade_area_chart
-  return(combined_area_chart)
+  clade_area_chart / subclade_area_chart
 }
 
-# Create and display the charts using the updated function calls
-h1n1_combined_area_chart <- create_combined_area_chart(
-  df_h1n1_clade_filled,
-  df_h1n1_subclade_filled,
-  "A/H1N1",
-  kvalitativ_a,
-  kvalitativ_b
-)
-h3n2_combined_area_chart <- create_combined_area_chart(
-  df_h3n2_clade_filled,
-  df_h3n2_subclade_filled,
-  "A/H3N2",
-  kvalitativ_a,
-  kvalitativ_b
-)
-bvic_combined_area_chart <- create_combined_area_chart(
-  df_bvic_clade_filled,
-  df_bvic_subclade_filled,
-  "B/Victoria",
-  kvalitativ_a,
-  kvalitativ_b
-)
+build_subtype_plot_inputs <- function(subtype_name) {
+  subtype_data <- clade_subclade_fludb %>%
+    filter(ngs_sekvens_resultat == subtype_name)
 
+  if (nrow(subtype_data) == 0) {
+    return(NULL)
+  }
 
-export_graph_f <- save_plot_to_ppt(export_graph_f, h1n1_combined_area_chart)
-export_graph_f <- save_plot_to_ppt(export_graph_f, h3n2_combined_area_chart)
-export_graph_f <- save_plot_to_ppt(export_graph_f, bvic_combined_area_chart)
+  clade_percentage <- create_grouped_df_with_percentage(
+    subtype_data,
+    "nc_ha_clade"
+  ) %>%
+    order_month_year()
+  subclade_percentage <- create_grouped_df_with_percentage(
+    subtype_data,
+    "nc_ha_subclade"
+  ) %>%
+    order_month_year()
+
+  list(
+    combined = combine_clade_subclade(
+      clade_percentage,
+      subclade_percentage,
+      "nc_ha_clade",
+      "nc_ha_subclade"
+    ),
+    clade_filled = fill_missing_months(clade_percentage, "nc_ha_clade"),
+    subclade_filled = fill_missing_months(subclade_percentage, "nc_ha_subclade")
+  )
+}
+
+subtype_plot_inputs <- stats::setNames(
+  lapply(flu_reportable_subtypes, build_subtype_plot_inputs),
+  flu_reportable_subtypes
+)
+subtype_plot_inputs <- subtype_plot_inputs[
+  !vapply(subtype_plot_inputs, is.null, logical(1))
+]
+
+# Output: monthly clade/subclade bar slides by reportable subtype.
+for (subtype_name in names(subtype_plot_inputs)) {
+  combined_chart <- create_combined_chart(
+    subtype_plot_inputs[[subtype_name]]$combined,
+    subtype_name
+  )
+  export_graph_f <- add_plot_output(
+    export_graph_f,
+    combined_chart,
+    title = paste0(subtype_name, " - klade og subklade per måned")
+  )
+}
+
+# Output: monthly clade/subclade area slides by reportable subtype.
+for (subtype_name in names(subtype_plot_inputs)) {
+  combined_area_chart <- create_combined_area_chart(
+    subtype_plot_inputs[[subtype_name]]$clade_filled,
+    subtype_plot_inputs[[subtype_name]]$subclade_filled,
+    subtype_name,
+    kvalitativ_a,
+    kvalitativ_b
+  )
+  export_graph_f <- add_plot_output(
+    export_graph_f,
+    combined_area_chart,
+    title = paste0(subtype_name, " - klade og subklade per måned (areal)")
+  )
+}
+
 
 # ==============================================================================
 # Drug resistance datasets from fludb
 # ==============================================================================
 
-export_graph_f <- add_section_slide(
+export_graph_f <- add_section_output(
   export_graph_f,
   "Seksjon: Antiviral resistens",
   "Resistenstabeller og mutasjonsoppsummeringer"
@@ -1575,8 +1542,9 @@ antiviral <- fludb %>%
 
 
 # Define a function to calculate resistance percentages, ignoring NA for the specific drug
+# Define a function to calculate resistance percentages, ignoring NA for the specific drug
 calculate_resistance <- function(data, column_name) {
-  non_na_data <- data %>% filter(!is.na(get(column_name)))
+  non_na_data <- data %>% filter(!is.na(.data[[column_name]]))
   total_resistance <- sum(non_na_data[[column_name]] %in% c("AAHRI", "AARI"))
   total_non_resistance <- sum(non_na_data[[column_name]] %in% c("AANS", "AANI"))
   total_tested <- total_resistance + total_non_resistance
@@ -1585,12 +1553,13 @@ calculate_resistance <- function(data, column_name) {
     (total_resistance / total_tested) * 100,
     NA
   )
-  return(list(
+  list(
     total_resistance = total_resistance,
     total_tested = total_tested,
     percentage_resistance = percentage_resistance
-  ))
+  )
 }
+
 
 # Initialize a list to store the results
 results_list <- list()
@@ -1669,9 +1638,10 @@ table_data <- list(
 )
 
 # Loop through each item in the list to generate and export tables
+# Output: one resistance summary slide per table so captions stay aligned with the deck.
 for (table_info in table_data) {
   # Save the original data frame to the PowerPoint presentation
-  export_graph_f <- save_table_to_ppt(
+  export_graph_f <- add_table_output(
     export_graph_f,
     table_info$data,
     table_info$caption
@@ -1679,347 +1649,13 @@ for (table_info in table_data) {
 }
 
 # ==============================================================================
-# Patient metadata summaries from fludb
-# ==============================================================================
-
-if (FALSE) {
-  export_graph_f <- add_section_slide(
-    export_graph_f,
-    "Seksjon: Pasientmetadata",
-    "Metadatafigurer og fordelinger beregnet fra fludb"
-  )
-
-  # Function to create a pie chart with counts
-  create_pie_chart <- function(
-    data,
-    fill_var,
-    fill_label,
-    presentation,
-    layout = "Title and Content",
-    master = "Office Theme"
-  ) {
-    # Create a vector of labels that include counts
-    labels_with_counts <- paste(data[[fill_var]], "\nn=", data$count)
-
-    pie_chart <- ggplot(data, aes(x = "", y = count, fill = .data[[fill_var]])) +
-      geom_bar(stat = "identity", width = 1) + # Bar chart (needed for pie chart)
-      coord_polar("y", start = 0) + # Convert to pie chart
-      theme_void() + # Remove background and axis
-      scale_fill_manual(values = kvalitativ_comb, labels = labels_with_counts) + # Color palette with labels
-      labs(fill = fill_label) + # Label for legend
-      theme(legend.position = "right") # Position legend on the right
-
-    # Print the chart
-
-    # Save to PowerPoint
-    export_graph_f <- save_plot_to_ppt(
-      export_graph_f,
-      pie_chart,
-      layout,
-      master,
-      title = paste("Fordeling:", fill_label)
-    )
-
-    return(export_graph_f)
-  }
-
-
-  # Function to create a percentage stacked bar chart
-  create_percentage_stacked_bar_chart <- function(
-    data,
-    x_var,
-    y_var,
-    fill_var,
-    fill_label,
-    presentation,
-    layout = "Title and Content",
-    master = "Office Theme"
-  ) {
-    # Calculate percentages
-    data <- data %>%
-      group_by(.data[[x_var]]) %>%
-      mutate(percent = .data[[y_var]] / sum(.data[[y_var]]) * 100)
-
-    stacked_bar_chart <- ggplot(
-      data,
-      aes(x = .data[[x_var]], y = percent, fill = .data[[fill_var]])
-    ) +
-      geom_bar(stat = "identity", position = "fill") + # Percentage stacked bar chart
-      labs(x = x_var, y = axis_share_label, fill = fill_label) + # Axis labels
-      scale_fill_manual(values = kvalitativ_comb) + # Use the color palette
-      theme_minimal() + # Minimal theme
-      theme(legend.position = "right") + # Position legend on the right
-      geom_text(
-        aes(label = paste0(round(percent, 1), "%")),
-        position = position_fill(vjust = 0.5),
-        color = fhi_text_dark
-      ) # Add text labels
-
-    # Print the chart
-
-    # Save to PowerPoint
-    export_graph_f <- save_plot_to_ppt(
-      export_graph_f,
-      stacked_bar_chart,
-      layout,
-      master,
-      title = paste("Andeler:", x_var, "og", fill_label)
-    )
-
-    return(export_graph_f)
-  }
-
-
-  # Function to create a standard bar chart
-  create_standard_bar_chart <- function(
-    data,
-    x_var,
-    y_var,
-    fill_var,
-    fill_label,
-    presentation,
-    layout = "Title and Content",
-    master = "Office Theme"
-  ) {
-    # Create the bar chart using counts
-    standard_bar_chart <- ggplot(
-      data,
-      aes(x = .data[[x_var]], y = .data[[y_var]], fill = .data[[fill_var]])
-    ) +
-      geom_bar(stat = "identity") + # Standard bar chart
-      labs(x = x_var, y = axis_count_label, fill = fill_label) + # Axis labels
-      scale_fill_manual(values = kvalitativ_comb) + # Use the color palette
-      theme_minimal() + # Minimal theme
-      theme(legend.position = "right") + # Position legend on the right
-      geom_text(
-        aes(label = .data[[y_var]]), # Add text labels with counts
-        position = position_stack(vjust = 0.5),
-        color = fhi_text_dark
-      ) # Adjust label position
-
-    # Print the chart
-
-    # Save to PowerPoint
-    export_graph_f <- save_plot_to_ppt(
-      export_graph_f,
-      standard_bar_chart,
-      layout,
-      master,
-      title = paste("Antall:", x_var, "og", fill_label)
-    )
-
-    return(export_graph_f)
-  }
-
-  create_andel_antall_combined_plot <- function(
-    data,
-    x_var,
-    fill_var,
-    count_var = "n",
-    x_label = NULL,
-    title_base = NULL
-  ) {
-    if (is.null(x_label)) x_label <- x_var
-    if (is.null(title_base)) title_base <- x_var
-
-    p_andel <- ggplot(data, aes(x = .data[[x_var]], y = .data[[count_var]], fill = .data[[fill_var]])) +
-      geom_col(position = "fill") +
-      scale_fill_manual(values = kvalitativ_comb) +
-      scale_y_continuous(labels = percent_format(scale = 1), expand = c(0, 0)) +
-      labs(title = NULL, x = NULL, y = axis_share_label, fill = fill_var) +
-      theme_minimal() +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "right")
-
-    p_antall <- ggplot(data, aes(x = .data[[x_var]], y = .data[[count_var]], fill = .data[[fill_var]])) +
-      geom_col() +
-      scale_fill_manual(values = kvalitativ_comb) +
-      labs(title = NULL, x = NULL, y = axis_count_label, fill = fill_var) +
-      theme_minimal() +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
-
-    p_andel + p_antall +
-      plot_layout(ncol = 1, heights = c(1, 1), guides = "collect") &
-      theme(legend.position = "right")
-  }
-
-
-  # Create the summarized data for Prove Kategori
-  prove_kat <- fludb %>%
-    filter(tessy_reportable_variable != "") %>%
-    mutate(prove_kategori = prove_kategori_group) %>%
-    group_by(prove_kategori) %>%
-    summarise(count = n(), .groups = "drop") # Count samples for each category
-
-  # Create the pie chart for Prove Kategori
-  prove_kat_plot <- create_pie_chart(
-    prove_kat,
-    "prove_kategori",
-    "Prove Kategori"
-  )
-
-  # Create the summarized data for Pasient Status
-  pasient_hosp <- fludb %>%
-    filter(pasient_status != "") %>% # Remove empty pasient_status
-    group_by(pasient_status) %>% # Group by pasient_status
-    summarise(count = n(), .groups = "drop") # Count samples for each category
-
-
-  # Create the pie chart for Pasient Status
-  pasient_hospgr <- create_pie_chart(
-    pasient_hosp,
-    "pasient_status",
-    "Pasient Status"
-  )
-
-  # Create the summarized data for Pasient Status and Prove Kategori
-  prove_kat_combined <- fludb %>%
-    filter(pasient_status != "") %>% # Remove empty pasient_status
-    mutate(
-      prove_kategori = prove_kategori_group
-    ) %>%
-    group_by(pasient_status, prove_kategori) %>%
-    count(name = "n") # Count samples for each combination
-
-  prove_kat_combined_plot <- create_andel_antall_combined_plot(
-    prove_kat_combined,
-    x_var = "pasient_status",
-    fill_var = "prove_kategori",
-    count_var = "n",
-    x_label = "Pasientstatus",
-    title_base = "Pasientstatus"
-  )
-  export_graph_f <- save_plot_to_ppt(export_graph_f, prove_kat_combined_plot, title = "Pasientstatus")
-
-  # Create the summarized data for Pasient Status and subclade by subtype
-  passtat_subclade <- fludb %>%
-    filter(
-      ngs_sekvens_resultat %in% c("A/H1N1", "A/H3N2", "B/Victoria"),
-      !is.na(nc_ha_subclade),
-      nc_ha_subclade != ""
-    ) %>%
-    group_by(ngs_sekvens_resultat, pasient_status, nc_ha_subclade) %>%
-    count(name = "n") %>%
-    group_by(ngs_sekvens_resultat, pasient_status) %>%
-    mutate(percent = n / sum(n) * 100) %>%
-    ungroup()
-
-  for (subtype_name in c("A/H1N1", "A/H3N2", "B/Victoria")) {
-    subtype_passtat <- passtat_subclade %>% filter(ngs_sekvens_resultat == subtype_name)
-    if (nrow(subtype_passtat) == 0) next
-
-    combined_passtat_plot <- create_andel_antall_combined_plot(
-      subtype_passtat,
-      x_var = "pasient_status",
-      fill_var = "nc_ha_subclade",
-      count_var = "n",
-      x_label = "Pasientstatus",
-      title_base = "Pasientstatus"
-    )
-    export_graph_f <- save_plot_to_ppt(
-      export_graph_f,
-      combined_passtat_plot,
-      title = paste(subtype_name, "- Pasientstatus")
-    )
-  }
-
-  # Create the summarized data for Pasient_aldersgruppe
-  pasage <- fludb %>%
-    filter(tessy_reportable_variable != "") %>%
-    group_by(pasient_aldersgruppe) %>% # Group by prove_kategori
-    summarise(count = n(), .groups = "drop") # Count samples for each category
-
-  # Create the pie chart for Pasient_aldersgruppe
-  pas_age_plot <- create_pie_chart(
-    pasage,
-    "pasient_aldersgruppe",
-    "Pasient aldersgruppe NGS"
-  )
-
-  # Create summarized data for Pasient Aldersgruppe and subclade by subtype
-  pasage_subclade <- fludb %>%
-    filter(
-      ngs_sekvens_resultat %in% c("A/H1N1", "A/H3N2", "B/Victoria"),
-      !is.na(nc_ha_subclade),
-      nc_ha_subclade != ""
-    ) %>%
-    group_by(ngs_sekvens_resultat, pasient_aldersgruppe, nc_ha_subclade) %>%
-    count(name = "n") %>%
-    group_by(ngs_sekvens_resultat, pasient_aldersgruppe) %>%
-    mutate(percent = n / sum(n) * 100) %>%
-    ungroup()
-
-  for (subtype_name in c("A/H1N1", "A/H3N2", "B/Victoria")) {
-    subtype_pasage <- pasage_subclade %>% filter(ngs_sekvens_resultat == subtype_name)
-    if (nrow(subtype_pasage) == 0) next
-
-    combined_pasage_plot <- create_andel_antall_combined_plot(
-      subtype_pasage,
-      x_var = "pasient_aldersgruppe",
-      fill_var = "nc_ha_subclade",
-      count_var = "n",
-      x_label = "Pasientaldersgruppe",
-      title_base = "Pasientaldersgruppe"
-    )
-    export_graph_f <- save_plot_to_ppt(
-      export_graph_f,
-      combined_pasage_plot,
-      title = paste(subtype_name, "- Pasientaldersgruppe")
-    )
-  }
-
-  # Create the summarized data for Pasient Landsdel
-  pasladel <- fludb %>%
-    filter(tessy_reportable_variable != "") %>%
-    group_by(pasient_landsdel) %>% # Group by prove_kategori
-    summarise(count = n(), .groups = "drop") # Count samples for each category
-
-  # Create the pie chart for Pasient_aldersgruppe
-  pasladel_plot <- create_pie_chart(
-    pasladel,
-    "pasient_landsdel",
-    "Pasient Landsdel NGS"
-  )
-
-  # Create summarized data for Pasient Landsdel and subclade by subtype
-  pasladel_subclade <- fludb %>%
-    filter(
-      ngs_sekvens_resultat %in% c("A/H1N1", "A/H3N2", "B/Victoria"),
-      !is.na(nc_ha_subclade),
-      nc_ha_subclade != ""
-    ) %>%
-    group_by(ngs_sekvens_resultat, pasient_landsdel, nc_ha_subclade) %>%
-    count(name = "n") %>%
-    group_by(ngs_sekvens_resultat, pasient_landsdel) %>%
-    mutate(percent = n / sum(n) * 100) %>%
-    ungroup()
-
-  for (subtype_name in c("A/H1N1", "A/H3N2", "B/Victoria")) {
-    subtype_pasladel <- pasladel_subclade %>% filter(ngs_sekvens_resultat == subtype_name)
-    if (nrow(subtype_pasladel) == 0) next
-
-    combined_pasladel_plot <- create_andel_antall_combined_plot(
-      subtype_pasladel,
-      x_var = "pasient_landsdel",
-      fill_var = "nc_ha_subclade",
-      count_var = "n",
-      x_label = "Landsdel",
-      title_base = "Pasient landsdel"
-    )
-    export_graph_f <- save_plot_to_ppt(
-      export_graph_f,
-      combined_pasladel_plot,
-      title = paste(subtype_name, "- Pasient landsdel")
-    )
-  }
-
-}
 
 
 # ==============================================================================
 # HA mutation datasets from fludb
 # ==============================================================================
 
-export_graph_f <- add_section_slide(
+export_graph_f <- add_section_output(
   export_graph_f,
   "Seksjon: HA-mutasjoner",
   "Varmekart, epitopoppsummeringer og mutasjonstrender"
@@ -2027,7 +1663,7 @@ export_graph_f <- add_section_slide(
 
 present_subclades_tbl <- fludb %>%
   filter(
-    ngs_sekvens_resultat %in% c("A/H1N1", "A/H3N2", "B/Victoria"),
+    ngs_sekvens_resultat %in% flu_reportable_subtypes,
     !is.na(nc_ha_subclade),
     nc_ha_subclade != ""
   ) %>%
@@ -2046,96 +1682,11 @@ present_subclades_tbl <- fludb %>%
   ) %>%
   arrange(ngs_sekvens_resultat, nc_ha_subclade)
 
-export_graph_f <- save_table_to_ppt(
+export_graph_f <- add_table_output(
   export_graph_f,
   present_subclades_tbl,
   "Subklader i datasettet og cluster-definerende HA-mutasjoner"
 )
-
-# Filter data for the last 12 months and format date
-flu_mut_data <- fludb %>%
-  filter(ngs_sekvens_resultat %in% c("A/H3N2")) %>%
-  mutate(
-    Sampledate = as.Date(prove_tatt),
-    Substitution = gsub(";", ",", mut_ha1_cluster_defining),
-    YearMonth = format_month_label(Sampledate)
-  ) %>%
-  select(Sampledate, mut_ha1_cluster_defining, ngs_sekvens_resultat, YearMonth)
-
-spm_flu <- flu_mut_data %>%
-  group_by(YearMonth, ngs_sekvens_resultat) %>%
-  count(name = "TotalSeq") %>%
-  ungroup()
-
-mutations <- c("S145N", "N158K", "K189R")
-
-# Create binary columns indicating mutation presence
-for (mutation in mutations) {
-  flu_mut_data[[mutation]] <- as.integer(str_detect(
-    flu_mut_data$mut_ha1_cluster_defining,
-    mutation
-  ))
-}
-
-# Combine mutations into a single column
-flu_mut_data <- flu_mut_data %>%
-  mutate(
-    Combination = apply(
-      as.data.frame(dplyr::select(., dplyr::all_of(mutations))),
-      1,
-      function(x) {
-        combination <- paste(names(x)[as.integer(x) == 1], collapse = ",")
-        ifelse(combination == "", "ingen mutasjoner", combination)
-      }
-    )
-  )
-
-# Summarize occurrences of mutation combinations by month and flu type
-counts <- flu_mut_data %>%
-  group_by(YearMonth, ngs_sekvens_resultat, Combination) %>%
-  summarise(Count = n(), .groups = "drop")
-
-# Join with total sequences per month per flu type
-counts <- counts %>%
-  left_join(spm_flu, by = c("YearMonth", "ngs_sekvens_resultat")) %>%
-  mutate(Percentage = (Count / TotalSeq) * 100) %>%
-  select(YearMonth, ngs_sekvens_resultat, Combination, Percentage)
-
-# Convert YearMonth to Date format and prepare varmekart data
-countm <- counts %>%
-  mutate(YearMonth = parse_month_label(YearMonth))
-
-varmekart_data <- countm %>%
-  tidyr::pivot_wider(
-    names_from = Combination,
-    values_from = Percentage,
-    values_fill = 0
-  )
-
-varmekart_data_melted <- varmekart_data %>%
-  tidyr::pivot_longer(
-    cols = -c(YearMonth, ngs_sekvens_resultat),
-    names_to = "variable",
-    values_to = "value"
-  )
-
-# Plot varmekart with text labels
-hmap_flu <- ggplot(
-  varmekart_data_melted,
-  aes(x = YearMonth, y = variable, fill = value)
-) +
-  geom_tile() +
-  geom_text(aes(label = sprintf("%.1f", value)), size = 3, color = fhi_text_dark) + # Add numbers in tiles
-  scale_fill_gradientn(colours = kvantitativ_b1) +
-  scale_x_date(labels = format_month_label, date_breaks = "1 month") +
-  facet_wrap(~ngs_sekvens_resultat, scales = "free_y") +
-  labs(
-    title = "",
-    x = "",
-    y = "",
-    fill = "Prosentandel av all H3N2 sekvenser"
-  ) +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
 
 # ==============================================================================
@@ -2524,7 +2075,7 @@ HA_mut_vac_sum <- HA_mut_vac_l %>%
     month_year = format_month_label(ymd(prove_tatt)),
     ngs_sekvens_resultat = factor(
       ngs_sekvens_resultat,
-      levels = c("A/H1N1", "A/H3N2", "B/Victoria")
+      levels = flu_reportable_subtypes
     )
   )
 
@@ -2723,7 +2274,7 @@ ha_mutation_trend_source <- fludb %>%
     )
   )
 
-ha_mutation_subtype_order <- c("A/H1N1", "A/H3N2", "B/Victoria")
+ha_mutation_subtype_order <- flu_reportable_subtypes
 last_four_month_start <- floor_date(Sys.Date(), unit = "month") %m-% months(3)
 
 for (current_subtype in ha_mutation_subtype_order) {
@@ -2912,12 +2463,10 @@ for (current_subtype in ha_mutation_subtype_order) {
         Prosent_av_subtype = percent_of_subtype
       )
 
-    subtype_sheet_stub <- case_when(
-      current_subtype == "A/H1N1" ~ "H1",
-      current_subtype == "A/H3N2" ~ "H3",
-      current_subtype == "B/Victoria" ~ "BVic",
-      TRUE ~ "subtype"
-    )
+    subtype_sheet_stub <- unname(flu_subtype_sheet_stubs[current_subtype])
+    if (length(subtype_sheet_stub) == 0 || is.na(subtype_sheet_stub)) {
+      subtype_sheet_stub <- "subtype"
+    }
     sheet_stub <- sanitize_excel_sheet_name(
       paste0(subtype_sheet_stub, "_", subclade_index, "_", current_subclade),
       max_length = 20
@@ -2926,7 +2475,7 @@ for (current_subtype in ha_mutation_subtype_order) {
     excel_export_sheets[[paste0(sheet_stub, "_varmekart")]] <- subclade_varmekart_data
     excel_export_sheets[[paste0(sheet_stub, "_linje")]] <- subclade_line_data
 
-    export_graph_f <- save_table_to_ppt(
+    export_graph_f <- add_table_output(
       export_graph_f,
       subclade_ppt_table,
       paste("HA-mutasjonstrender -", current_subtype, "-", current_subclade)
@@ -2981,7 +2530,7 @@ for (current_subtype in ha_mutation_subtype_order) {
         axis.text.y = element_text(size = y_label_size)
       )
 
-    export_graph_f <- save_plot_to_ppt(
+    export_graph_f <- add_plot_output(
       export_graph_f,
       subclade_varmekart_plot,
       title = paste("HA-mutasjonstrender varmekart -", current_subtype, "-", current_subclade)
@@ -3049,7 +2598,7 @@ for (current_subtype in ha_mutation_subtype_order) {
         show.legend = FALSE
       )
 
-    export_graph_f <- save_plot_to_ppt(
+    export_graph_f <- add_plot_output(
       export_graph_f,
       subclade_line_plot,
       title = paste("HA-mutasjonstrender linjer -", current_subtype, "-", current_subclade)
@@ -3061,8 +2610,6 @@ for (current_subtype in ha_mutation_subtype_order) {
 # ==============================================================================
 # Recent HA mutation plots from HA_mut_l
 # ==============================================================================
-start_date <- (as.Date(Sys.Date()) - 60)
-end_date <- as.Date(Sys.Date())
 
 # Build default epitope-plot source from mut_ha1_1 with subclade-defining
 # mutations removed (mut_ha1_without_subclade_signature).
@@ -3150,7 +2697,7 @@ create_epitope_lollipop_plot <- function(df, subtype_label, subtitle_label, face
       ggplot() +
         annotate("text", x = 0, y = 0, label = paste("Ingen HA-epitope-data for", subtype_label), size = 6) +
         labs(
-          title = paste("Lollipop: epitop-posisjoner i HA-proteinet (", subtype_label, ")", sep = ""),
+          title = paste("Epitop-posisjoner i HA-proteinet (", subtype_label, ")", sep = ""),
           subtitle = subtitle_label,
           x = "AA-posisjon (HA)",
           y = "Antall sekvenser (n)"
@@ -3173,7 +2720,7 @@ create_epitope_lollipop_plot <- function(df, subtype_label, subtitle_label, face
       ggplot() +
         annotate("text", x = 0, y = 0, label = paste("Ingen plottbare HA-epitope-data for", subtype_label), size = 6) +
         labs(
-          title = paste("Lollipop: epitop-posisjoner i HA-proteinet (", subtype_label, ")", sep = ""),
+          title = paste("Epitop-posisjoner i HA-proteinet (", subtype_label, ")", sep = ""),
           subtitle = subtitle_label,
           x = "AA-posisjon (HA)",
           y = "Antall sekvenser (n)"
@@ -3226,7 +2773,7 @@ create_epitope_lollipop_plot <- function(df, subtype_label, subtitle_label, face
     scale_color_manual(values = epitope_palette) +
     scale_size_continuous(name = "Antall (n)") +
     labs(
-      title = paste("Lollipop: epitop-posisjoner i HA-proteinet (", subtype_label, ")", sep = ""),
+      title = paste("Epitop-posisjoner i HA-proteinet (", subtype_label, ")", sep = ""),
       subtitle = subtitle_label,
       x = "AA-posisjon (HA)",
       y = NULL,
@@ -3248,7 +2795,7 @@ create_epitope_lollipop_plot <- function(df, subtype_label, subtitle_label, face
   base_plot
 }
 
-for (subtype_name in c("A/H1N1", "A/H3N2", "B/Victoria")) {
+for (subtype_name in flu_reportable_subtypes) {
   subtype_lollipop <- build_subtype_lollipop_data(subtype_name)
   lollipop_plot <- create_epitope_lollipop_plot(
     subtype_lollipop$data,
@@ -3256,10 +2803,10 @@ for (subtype_name in c("A/H1N1", "A/H3N2", "B/Victoria")) {
     subtype_lollipop$window_label,
     facet_by_subclade = TRUE
   )
-  export_graph_f <- save_plot_to_ppt(
+  export_graph_f <- add_plot_output(
     export_graph_f,
     lollipop_plot,
-    title = paste("Lollipop: epitop-posisjoner i HA-proteinet (", subtype_name, ")", sep = "")
+    title = paste("Epitop-posisjoner i HA-proteinet (", subtype_name, ")", sep = "")
   )
 }
 
@@ -3278,7 +2825,7 @@ mutation_dot_df <- ha_lollipop_source %>%
     .groups = "drop"
   )
 
-for (subtype_name in c("A/H1N1", "A/H3N2", "B/Victoria")) {
+for (subtype_name in flu_reportable_subtypes) {
   subtype_dot_df <- mutation_dot_df %>% filter(ngs_sekvens_resultat == subtype_name)
   if (nrow(subtype_dot_df) == 0) next
   p_dot_mut <- ggplot(
@@ -3297,7 +2844,7 @@ for (subtype_name in c("A/H1N1", "A/H3N2", "B/Victoria")) {
     ) +
     theme_minimal() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "right")
-  export_graph_f <- save_plot_to_ppt(export_graph_f, p_dot_mut)
+  export_graph_f <- add_plot_output(export_graph_f, p_dot_mut)
 }
 
 # Dot-plot for epitope mutations over tid per subtype.
@@ -3315,7 +2862,7 @@ epitope_dot_df <- ha_lollipop_source %>%
     .groups = "drop"
   )
 
-for (subtype_name in c("A/H1N1", "A/H3N2", "B/Victoria")) {
+for (subtype_name in flu_reportable_subtypes) {
   subtype_epi_df <- epitope_dot_df %>% filter(ngs_sekvens_resultat == subtype_name)
   if (nrow(subtype_epi_df) == 0) next
   p_dot_epi <- ggplot(
@@ -3334,7 +2881,7 @@ for (subtype_name in c("A/H1N1", "A/H3N2", "B/Victoria")) {
     ) +
     theme_minimal() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "right")
-  export_graph_f <- save_plot_to_ppt(export_graph_f, p_dot_epi)
+  export_graph_f <- add_plot_output(export_graph_f, p_dot_epi)
 }
 
 
@@ -3363,7 +2910,7 @@ HAcount <- HAcount %>%
   left_join(
     sekv,
     by = c("month_year", "ngs_sekvens_resultat"),
-    relationship = "many-to-many"
+    relationship = "many-to-one"
   ) %>%
   mutate(
     Percent = n / total_vsek,
@@ -3479,7 +3026,7 @@ for (lineage in unique(HAcount$ngs_sekvens_resultat)) {
   # Print the individual plot
 
   # Print the individual plot to a PowerPoint slide
-  export_graph_f <- save_plot_to_ppt(
+  export_graph_f <- add_plot_output(
     export_graph_f,
     plot,
     title = paste("HA-mutasjonslinjer -", lineage)
@@ -3491,7 +3038,7 @@ for (lineage in unique(HAcount$ngs_sekvens_resultat)) {
 # Glycosylation dataset from fludb
 # ==============================================================================
 
-export_graph_f <- add_section_slide(
+export_graph_f <- add_section_output(
   export_graph_f,
   "Seksjon: Glykosylering",
   "Glykosyleringssteder over tid per subtype"
@@ -3597,14 +3144,14 @@ glygr <- ggplot(
   theme_minimal() + # Use minimal theme for clarity
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Rotate x-axis text for better readability
 
-export_graph_f <- save_plot_to_ppt(export_graph_f, glygr)
+export_graph_f <- add_plot_output(export_graph_f, glygr)
 
 
 # ==============================================================================
 # Frameshift, insertion, and deletion dataset from fludb
 # ==============================================================================
 
-export_graph_f <- add_section_slide(
+export_graph_f <- add_section_output(
   export_graph_f,
   "Seksjon: Frameshift, insersjoner og delesjoner",
   "Mutasjonsvarmekart per gen og subtype"
@@ -3612,7 +3159,7 @@ export_graph_f <- add_section_slide(
 
 # Step 1: Filter the dataset for relevant subtypes and select columns
 filtered_fludb <- fludb %>%
-  filter(ngs_sekvens_resultat %in% c("A/H1N1", "A/H3N2", "B/Victoria")) %>%
+  filter(ngs_sekvens_resultat %in% flu_reportable_subtypes) %>%
   select(
     month_year,
     ngs_sekvens_resultat,
@@ -3732,7 +3279,13 @@ extract_numeric_and_sort <- function(data, mutation_col) {
 
 # Step 6: Create varmekarts for each mutation type
 create_varmekart <- function(data, title, mutation_col) {
-  ggplot(data, aes(x = Sampledate, y = !!sym(mutation_col), fill = percent)) +
+  plot_data <- data %>%
+    mutate(
+      mutation_label = normalize_mutation_site_label(.data[[mutation_col]]),
+      mutation_label = factor(mutation_label, levels = unique(mutation_label))
+    )
+
+  ggplot(plot_data, aes(x = Sampledate, y = mutation_label, fill = percent)) +
     geom_tile(color = NA) + # Create tiles for the varmekart
     facet_wrap(~ngs_sekvens_resultat, scales = "free_y") + # Create facets for each subtype
     scale_fill_gradientn(
@@ -3748,6 +3301,7 @@ create_varmekart <- function(data, title, mutation_col) {
     theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Rotate x-axis text for better readability
 }
 
+# Output: mutation-panel heatmaps are exported one slide per mutation type.
 # Loop through each mutation type and generate varmekarts
 for (mutation in mutation_columns) {
   # Create individual counts
@@ -3767,20 +3321,17 @@ for (mutation in mutation_columns) {
   sorted_data <- extract_numeric_and_sort(individual_percent, mutation)
 
   # Create and print varmekart
-  varmekart_title <- paste0(
-    gsub("_", " ", mutation),
-    " andel over tid per influensasubtype"
-  )
+  varmekart_title <- format_mutation_panel_title(mutation)
   varmekart <- create_varmekart(sorted_data, varmekart_title, mutation)
-  export_graph_f <- save_plot_to_ppt(export_graph_f, varmekart)
+  export_graph_f <- add_plot_output(export_graph_f, varmekart, title = varmekart_title)
 }
 
 # ==============================================================================
-# Export
+# Exported patient surveillance outputs
 # ==============================================================================
 
 # Get the current week and year
-current_week <- week(Sys.Date())
+current_week <- lubridate::isoweek(Sys.Date())
 current_year <- year(Sys.Date())
 results_root <- Sys.getenv("INF_RESULTS_DIR", unset = "N:/Virologi/Influensa/2526/WGS_Analyse/Results")
 results_share_root <- Sys.getenv(
@@ -3808,21 +3359,32 @@ file_path_resultshare <- file.path(
   file_name_result
 )
 
-export_graph_f <- add_section_slide(
+export_graph_f <- add_section_output(
   export_graph_f,
-  "Population Under Surveillance"
+  "Seksjon: Pasientpopulasjon under overvåking"
 )
 
-add_meta_plot <- function(plot_obj, plot_title) {
+# Reuse the standard plot export wrapper so meta plots follow the same slide-title rules.
+add_meta_plot <- function(presentation, plot_obj, plot_title) {
   if (is.null(plot_obj)) {
-    return(invisible(NULL))
+    return(presentation)
   }
-  export_graph_f <<- save_plot_to_ppt(export_graph_f, plot_obj, title = plot_title)
+  add_plot_output(presentation, plot_obj, slide_title = plot_title)
 }
+
 
 norway_geojson_path <- resolve_norway_geojson_path()
 flu_prev <- fludb %>% filter(season == previous_season_label)
 flu_curr <- fludb %>% filter(season == current_season_label)
+shared_fylke_fill_limits <- c(
+  0,
+  max(
+    flu_prev %>% count(pasient_fylke_name, name = "n") %>% pull(n),
+    flu_curr %>% count(pasient_fylke_name, name = "n") %>% pull(n),
+    0,
+    na.rm = TRUE
+  )
+)
 
 p_fylke_prev <- build_fylke_map_plot_shared(
   flu_prev,
@@ -3843,19 +3405,35 @@ if (!is.null(p_fylke_curr) && !is.null(p_fylke_prev)) {
     previous_label = previous_season_label,
     current_label = current_season_label,
     map_builder = build_fylke_map_plot_shared,
+    title = "Fylkesfordeling",
     fylke_col = "pasient_fylke_name",
     shape_path = norway_geojson_path,
-    fill_palette = kvantitativ_b2
+    fill_palette = kvantitativ_b2,
+    fill_limits = shared_fylke_fill_limits
   )
-  add_meta_plot(p_fylke_pair, "Map: Fylke fordeling - left previous, right current")
+  export_graph_f <- add_meta_plot(
+    export_graph_f,
+    p_fylke_pair,
+    "Fylkesfordeling per sesong"
+  )
 }
 
 
 
 # Kjønn: current season vs previous season, pie side-by-side + monthly comparison
 if (all(c("pasient_kjnn", "season", "prove_tatt") %in% names(fludb))) {
+  sex_palette <- stats::setNames(
+    fhi_discrete_palette(3, kvalitativ_comb),
+    c("Female", "Male", "Ukjent")
+  )
   kjonn_compare <- fludb %>%
     normalize_sex_column(candidate_cols = c("pasient_kjnn", "pasient_kjonn")) %>%
+    mutate(
+      pasient_kjonn_std = factor(
+        pasient_kjonn_std,
+        levels = c("Female", "Male", "Ukjent")
+      )
+    ) %>%
     filter(season %in% c(current_season_label, previous_season_label))
 
   pie_builder <- function(dat, season_lbl) {
@@ -3868,8 +3446,11 @@ if (all(c("pasient_kjnn", "season", "prove_tatt") %in% names(fludb))) {
     season_n <- sum(d$n, na.rm = TRUE)
     d <- d %>%
       mutate(
-        pct = ifelse(season_n > 0, 100 * n / season_n, 0),
-        label_txt = paste0("N=", scales::comma(n))
+        label_txt = paste0("N=", scales::comma(n)),
+        pasient_kjonn_std = factor(
+          pasient_kjonn_std,
+          levels = c("Female", "Male", "Ukjent")
+        )
       )
     ggplot(d, aes(x = "", y = n, fill = pasient_kjonn_std)) +
       geom_col(width = 1) +
@@ -3879,27 +3460,25 @@ if (all(c("pasient_kjnn", "season", "prove_tatt") %in% names(fludb))) {
         size = 3
       ) +
       coord_polar(theta = "y") +
-      scale_fill_manual(values = fhi_discrete_palette(dplyr::n_distinct(d$pasient_kjonn_std), kvalitativ_comb)) +
-      labs(title = paste0(season_lbl, " (N=", scales::comma(season_n), ")"), fill = "Kjønn") +
+      scale_fill_manual(values = sex_palette, drop = FALSE) +
+      labs(title = paste0(format_presentation_season(season_lbl), " (N=", scales::comma(season_n), ")"), fill = "Kjønn") +
       theme_void()
   }
 
   p_kj_prev <- pie_builder(kjonn_compare, previous_season_label)
   p_kj_curr <- pie_builder(kjonn_compare, current_season_label)
   if (!is.null(p_kj_prev) && !is.null(p_kj_curr)) {
-    n_prev <- kjonn_compare %>%
-      filter(season == previous_season_label) %>%
-      nrow()
-    n_curr <- kjonn_compare %>%
-      filter(season == current_season_label) %>%
-      nrow()
     p_kj_pies <- p_kj_prev + p_kj_curr + patchwork::plot_layout(ncol = 2, guides = "collect") &
       theme(legend.position = "right")
-    add_meta_plot(
+    export_graph_f <- add_meta_plot(
+      export_graph_f,
       p_kj_pies,
       paste0(
-        "Kjønn: ", previous_season_label, " (N=", scales::comma(n_prev), ") vs ",
-        current_season_label, " (N=", scales::comma(n_curr), ") (pie)"
+        "Kjønn: ",
+        format_presentation_season(previous_season_label),
+        " vs ",
+        format_presentation_season(current_season_label),
+        " (kakediagram)"
       )
     )
   }
@@ -3917,11 +3496,15 @@ if (all(c("pasient_kjnn", "season", "prove_tatt") %in% names(fludb))) {
     p_kj_month <- ggplot(kjonn_month, aes(x = month_lbl, y = n, fill = pasient_kjonn_std)) +
       geom_col(position = "stack") +
       facet_wrap(~season, ncol = 1) +
-      scale_fill_manual(values = fhi_discrete_palette(dplyr::n_distinct(kjonn_month$pasient_kjonn_std), kvalitativ_comb)) +
+      scale_fill_manual(values = sex_palette, drop = FALSE) +
       labs(title = "Kjønn per måned: nåværende vs forrige sesong", x = "Måned i sesong", y = "Antall (n)", fill = "Kjønn") +
       theme_minimal() +
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
-    add_meta_plot(p_kj_month, "Kjønn per måned: sesongsammenligning")
+    export_graph_f <- add_meta_plot(
+      export_graph_f,
+      p_kj_month,
+      "Kjønn per måned: sesongsammenligning"
+    )
   }
 }
 
@@ -3946,13 +3529,17 @@ if (all(c("pasient_aldersgruppe", "season") %in% names(fludb))) {
     category_label = "Aldersgruppe",
     palette_base = kvalitativ_comb
   )
-  add_meta_plot(p_alder_pies, "Aldersgruppe: sesongsammenligning")
+  export_graph_f <- add_meta_plot(
+    export_graph_f,
+    p_alder_pies,
+    "Aldersgruppe: sesongsammenligning"
+  )
 }
 
 # SC2-guided harmonized patient/prove panels for FLU
 subclade_color_col <- intersect(c("nc_ha_subclade", "NC_HA_Subclade"), names(fludb))[1]
 virus_col <- if ("ngs_sekvens_resultat" %in% names(fludb)) "ngs_sekvens_resultat" else NULL
-virus_map <- c("A/H1N1" = "H1N1", "A/H3N2" = "H3N2", "B/Victoria" = "BVIC")
+virus_map <- c("A/H1N1" = "H1N1", "A/H3N2" = "H3N2", "B/Victoria" = "B/Victoria")
 if (!is.na(subclade_color_col) && !is.null(virus_col) && "prove_tatt" %in% names(fludb)) {
   flu_dims <- c(
     "pasient_fylke_name" = "Fylke",
@@ -3963,7 +3550,7 @@ if (!is.na(subclade_color_col) && !is.null(virus_col) && "prove_tatt" %in% names
   )
   flu_dims <- flu_dims[names(flu_dims) %in% names(fludb)]
 
-  export_graph_f <- add_section_slide(
+  export_graph_f <- add_section_output(
     export_graph_f,
     "Pasientrelatert analyse"
   )
@@ -3985,14 +3572,15 @@ if (!is.na(subclade_color_col) && !is.null(virus_col) && "prove_tatt" %in% names
       p_fylke <- build_fylke_map_plot_shared(
         flu_v,
         fylke_col = "pasient_fylke_name",
+        title = "Fylkesfordeling",
         shape_path = norway_geojson_path,
         fill_palette = kvantitativ_b2
       )
       if (!is.null(p_fylke)) {
-        export_graph_f <- save_plot_to_ppt(
+        export_graph_f <- add_plot_output(
           export_graph_f,
           p_fylke,
-          title = paste0(virus_label, " - Fylke fordeling")
+          title = paste0(virus_label, " - fylkesfordeling")
         )
       }
     }
@@ -4012,7 +3600,7 @@ if (!is.na(subclade_color_col) && !is.null(virus_col) && "prove_tatt" %in% names
       p_combined <- (p_pair$count_plot | p_pair$percent_plot) +
         patchwork::plot_layout(guides = "collect") &
         theme(legend.position = "bottom")
-      export_graph_f <- save_plot_to_ppt(
+      export_graph_f <- add_plot_output(
         export_graph_f,
         p_combined,
         title = paste0(virus_label, " etter ", dim_label, " (antall + %)")
@@ -4042,14 +3630,14 @@ if (!is.na(subclade_color_col) && !is.null(virus_col) && "prove_tatt" %in% names
       )
 
       if (!is.null(bar_plots$percent_plot)) {
-        export_graph_f <- save_plot_to_ppt(
+        export_graph_f <- add_plot_output(
           export_graph_f,
           bar_plots$percent_plot,
           title = paste0(virus_label, " - Pasient landsdel per måned (andel)")
         )
       }
       if (!is.null(bar_plots$count_plot)) {
-        export_graph_f <- save_plot_to_ppt(
+        export_graph_f <- add_plot_output(
           export_graph_f,
           bar_plots$count_plot,
           title = paste0(virus_label, " - Pasient landsdel per måned (antall)")

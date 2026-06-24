@@ -45,10 +45,15 @@ season_label_from_date <- function(x) {
 
 format_season_compare_label <- function(season_label, n_value) {
   season_chr <- as.character(season_label)
-  season_fmt <- stringr::str_replace(
-    season_chr,
-    "^Season([0-9]{2})_([0-9]{2})$",
-    "Sesong \\1\\2"
+  season_fmt <- ifelse(
+    stringr::str_detect(season_chr, "^Season[0-9]{2}_[0-9]{2}$"),
+    paste0(
+      "Sesong 20",
+      stringr::str_match(season_chr, "^Season([0-9]{2})_([0-9]{2})$")[, 2],
+      "/",
+      stringr::str_match(season_chr, "^Season([0-9]{2})_([0-9]{2})$")[, 3]
+    ),
+    season_chr
   )
   paste0(season_fmt, " (n=", scales::comma(as.integer(n_value)), ")")
 }
@@ -546,6 +551,8 @@ save_plot_to_ppt <- function(
     slide_title <- "Figur"
   }
 
+  # Ensure a single layout value is passed to officer::add_slide()
+  if (length(layout) != 1) layout <- layout[1]
   presentation <- officer::add_slide(presentation, layout = layout, master = master) |>
     officer::ph_with(plot_rvg, location = officer::ph_location_type(type = "body"))
 
@@ -579,6 +586,7 @@ save_table_to_ppt <- function(
   table_flextable <- flextable::flextable(table) |>
     flextable::autofit()
 
+  if (length(layout) != 1) layout <- layout[1]
   presentation <- officer::add_slide(presentation, layout = layout, master = master)
   presentation <- officer::ph_with(
     presentation,
@@ -598,9 +606,34 @@ add_section_slide <- function(
   presentation,
   title,
   subtitle = NULL,
+  main_topics = NULL,
   layout = "Title and Content",
   master = "Office Theme"
 ) {
+  # If caller provided main topics (common positional usage), render a section plot.
+  if (!is.null(main_topics) && length(main_topics) > 0) {
+    topic_text <- paste(paste0("\u2022 ", main_topics), collapse = "\n")
+    section_plot <- ggplot() +
+      annotate("text", x = 0, y = 0.25, label = title, size = 11, fontface = "bold", family = "sans") +
+      annotate("text", x = 0, y = -0.05, label = ifelse(is.null(subtitle), "", subtitle), size = 5, family = "sans") +
+      annotate("text", x = -0.75, y = -0.45, label = topic_text, hjust = 0, vjust = 1, size = 4.4, family = "sans") +
+      xlim(-1, 1) +
+      ylim(-1, 1) +
+      theme_void()
+
+    presentation <- save_plot_to_ppt(
+      presentation = presentation,
+      plot = section_plot,
+      layout = layout,
+      master = master,
+      title = title
+    )
+
+    return(presentation)
+  }
+
+  # Backward-compatible behaviour: add a slide with title and optional subtitle text.
+  if (length(layout) != 1) layout <- layout[1]
   presentation <- officer::add_slide(presentation, layout = layout, master = master)
   presentation <- officer::ph_with(
     presentation,
@@ -1124,9 +1157,10 @@ load_norway_fylke_sf <- function() {
 build_fylke_map_plot_shared <- function(
   df,
   fylke_col = "pasient_fylke_name",
-  title = "Map: Fylke fordeling",
+  title = "Fylkesfordeling",
   shape_path = NULL,
   fill_palette = kvantitativ_b2,
+  fill_limits = NULL,
   ...
 ) {
   if (is.null(df) || nrow(df) == 0 || !fylke_col %in% names(df)) return(NULL)
@@ -1176,12 +1210,14 @@ build_fylke_map_plot_shared <- function(
     ggplot2::geom_text(
       data = label_df,
       ggplot2::aes(x = X, y = Y, label = label_txt),
-      size = 2.8
+      size = 2.6,
+      check_overlap = TRUE
     ) +
     ggplot2::scale_fill_gradient(
       low = fill_palette[2],
       high = fill_palette[min(length(fill_palette), 8)],
-      na.value = "grey95"
+      na.value = "grey95",
+      limits = fill_limits
     ) +
     ggplot2::labs(title = title, fill = "Antall (n)") +
     ggplot2::theme_void()
@@ -1581,7 +1617,7 @@ prepare_run_quality_dataset <- function(
     )
 }
 
-run_quality_summary_table <- function(run_quality_df) {
+run_quality_summary_table <- function(run_quality_df, positive_status = "Passed", negative_status = "Not passed") {
   if (is.null(run_quality_df) || nrow(run_quality_df) == 0) return(NULL)
   run_quality_df %>%
     dplyr::group_by(run_id) %>%
@@ -1589,16 +1625,24 @@ run_quality_summary_table <- function(run_quality_df) {
       n_samples = dplyr::n(),
       mean_coverage = round(mean(run_quality_coverage_norm, na.rm = TRUE), 3),
       median_coverage = round(median(run_quality_coverage_norm, na.rm = TRUE), 3),
-      included_n = sum(run_quality_status == "Passed", na.rm = TRUE),
-      failed_n = sum(run_quality_status == "Not passed", na.rm = TRUE),
+      included_n = sum(run_quality_status == positive_status, na.rm = TRUE),
+      failed_n = sum(run_quality_status == negative_status, na.rm = TRUE),
       included_pct = round(100 * included_n / n_samples, 1),
       .groups = "drop"
     ) %>%
     dplyr::arrange(dplyr::desc(included_pct), dplyr::desc(median_coverage), dplyr::desc(n_samples), run_id)
 }
 
-plot_run_quality_stacked <- function(run_quality_df, y_var = c("percent", "n"), title_txt = "Run quality", fill_label = "Status") {
+plot_run_quality_stacked <- function(
+  run_quality_df,
+  y_var = c("percent", "n"),
+  title_txt = "Run quality",
+  fill_label = "Status",
+  label_mode = c("both", "n", "percent"),
+  status_colors = NULL
+) {
   y_var <- match.arg(y_var)
+  label_mode <- match.arg(label_mode)
   if (is.null(run_quality_df) || nrow(run_quality_df) == 0) return(NULL)
 
   d <- run_quality_df %>%
@@ -1607,12 +1651,26 @@ plot_run_quality_stacked <- function(run_quality_df, y_var = c("percent", "n"), 
     dplyr::mutate(percent = 100 * n / sum(n)) %>%
     dplyr::ungroup() %>%
     dplyr::mutate(
-      label_txt = ifelse(
-        y_var == "percent",
-        paste0("n=", scales::comma(n), "\n%=", round(percent, 1)),
-        paste0("n=", scales::comma(n), "\n%=", round(percent, 1))
+      label_txt = dplyr::case_when(
+        label_mode == "n" ~ paste0("n=", scales::comma(n)),
+        label_mode == "percent" ~ paste0("%=", round(percent, 1)),
+        TRUE ~ paste0("n=", scales::comma(n), "\n%=", round(percent, 1))
       )
     )
+
+  if (is.null(status_colors)) {
+    status_levels <- unique(as.character(d$run_quality_status))
+    if (all(c("Passed", "Not passed") %in% status_levels)) {
+      status_colors <- c("Passed" = "#179463", "Not passed" = "#d74b46")
+    } else if (all(c("Submitted", "Not submitted") %in% status_levels)) {
+      status_colors <- c("Submitted" = "#179463", "Not submitted" = "#d74b46")
+    } else {
+      status_colors <- stats::setNames(
+        fhi_discrete_palette(length(status_levels), kvalitativ_comb),
+        status_levels
+      )
+    }
+  }
 
   ggplot2::ggplot(d, ggplot2::aes(x = run_id, y = .data[[y_var]], fill = run_quality_status)) +
     ggplot2::geom_col(position = "stack") +
@@ -1622,7 +1680,7 @@ plot_run_quality_stacked <- function(run_quality_df, y_var = c("percent", "n"), 
       size = 2.8,
       lineheight = 0.9
     ) +
-    ggplot2::scale_fill_manual(values = c("Passed" = "#179463", "Not passed" = "#d74b46")) +
+    ggplot2::scale_fill_manual(values = status_colors, drop = FALSE) +
     ggplot2::labs(
       title = title_txt,
       x = "NGS run id",
@@ -1689,6 +1747,21 @@ format_flu_gene_label <- function(gene_col) {
     "PB2" = "PB2"
   )
   ifelse(gene_key %in% names(gene_map), unname(gene_map[gene_key]), gene_key)
+}
+
+flu_gene_gisaid_column <- function(gene_col) {
+  gene_key <- tolower(gsub("^ngs_coverage_", "", as.character(gene_col)))
+  gene_map <- c(
+    ha = "gisaid_ha_id",
+    na = "gisaid_na_id",
+    m = "gisaid_m_id",
+    ns = "gisaid_ns_id",
+    np = "gisaid_np_id",
+    pa = "gisaid_pa_id",
+    pb1 = "gisaid_pb1_id",
+    pb2 = "gisaid_pb2_id"
+  )
+  unname(gene_map[gene_key])
 }
 
 flu_subtype_palette <- function() {
