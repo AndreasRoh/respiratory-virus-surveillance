@@ -1,7 +1,0 @@
-[AUDIT] PPT path: N:/Virologi/Influensa/2526/WGS_Analyse/Github/ngs_scripts/respiratory-virus-surveillance/Results_Audit/Influenza__Week.25-2026_result.pptx
-[AUDIT] Slide count: 175
-[AUDIT] Slides with mojibake: 0
-[AUDIT] Slides with percent labels above 100: 0
-[AUDIT][SUBTYPE] H1N1 max_total_percent=100.0000 groups_over_100=0
-[AUDIT][SUBTYPE] H3N2 max_total_percent=100.0000 groups_over_100=0
-[AUDIT][SUBTYPE] BVIC max_total_percent=100.0000 groups_over_100=0

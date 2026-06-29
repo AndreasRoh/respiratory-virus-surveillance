@@ -1,6 +1,8 @@
-# SC2 20-25 data cleaning
-# Input: SC2_20_25_raw_merged
+# =============================================================================
+# SC2 legacy data cleaning (season 2020/21-2024/25)
+# Input:  SC2_20_25_raw_merged
 # Output: SC2_20_25_clean, SC2_20_25
+# =============================================================================
 
 resolve_script_dir <- function() {
   args_all <- commandArgs(trailingOnly = FALSE)
@@ -26,6 +28,17 @@ if (!exists("SC2_20_25_raw_merged")) {
   stop("Object 'SC2_20_25_raw_merged' is missing. Source SC2_SQLquery_BNCOVID19.R first.")
 }
 
+# Source-level text normalization is centralized in common_report_utils.R.
+normalize_sc2_text <- normalize_norwegian_text
+
+invalid_pangolin_short <- c(
+  "#BESTILT#", "Inkonklusiv", "inkonklusiv", "Se kommentar",
+  "Seekom", "", "Failed", "failed", "Unassigned"
+)
+
+# -----------------------------------------------------------------------------
+# Clean and harmonize the legacy SC2 extract.
+# -----------------------------------------------------------------------------
 SC2_20_25_clean <- SC2_20_25_raw_merged %>%
   tidyr::unite("spike_mut", s, s2, s3, sep = ";", na.rm = TRUE) %>%
   mutate(
@@ -97,18 +110,14 @@ SC2_20_25_clean <- SC2_20_25_raw_merged %>%
       "spike_mut"
     )
   ) %>%
+  mutate(across(where(is.character), normalize_sc2_text)) %>%
   filter(nc_coverage != "") %>%
   filter(prove_tatt != "") %>%
   normalize_geography_columns()
 
+# -----------------------------------------------------------------------------
+# Apply report inclusion criteria for the legacy source.
+# -----------------------------------------------------------------------------
 SC2_20_25 <- SC2_20_25_clean %>%
   filter(nc_coverage >= 70) %>%
-  filter(nc_pangolin_short != "#BESTILT#") %>%
-  filter(nc_pangolin_short != "Inkonklusiv") %>%
-  filter(nc_pangolin_short != "inkonklusiv") %>%
-  filter(nc_pangolin_short != "Se kommentar") %>%
-  filter(nc_pangolin_short != "Seekom") %>%
-  filter(nc_pangolin_short != "") %>%
-  filter(nc_pangolin_short != "Failed") %>%
-  filter(nc_pangolin_short != "failed") %>%
-  filter(nc_pangolin_short != "Unassigned")
+  filter(!nc_pangolin_short %in% invalid_pangolin_short)

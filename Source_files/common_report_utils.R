@@ -18,12 +18,64 @@ utils::globalVariables(
 )
 
 ## Label/date helpers
+nb_month_abbr <- c("jan", "feb", "mar", "apr", "mai", "jun", "jul", "aug", "sep", "okt", "nov", "des")
+
 format_month_label <- function(x) {
-  tolower(format(as.Date(x), "%b-%Y"))
+  d <- as.Date(x)
+  out <- rep(NA_character_, length(d))
+  ok <- !is.na(d)
+  out[ok] <- paste0(nb_month_abbr[lubridate::month(d[ok])], "-", format(d[ok], "%Y"))
+  out
+}
+
+format_month_year_nb <- function(x) {
+  d <- as.Date(x)
+  out <- rep(NA_character_, length(d))
+  ok <- !is.na(d)
+  out[ok] <- paste(nb_month_abbr[lubridate::month(d[ok])], format(d[ok], "%Y"))
+  out
+}
+
+format_month_key_nb <- function(x) {
+  d <- as.Date(x)
+  out <- rep(NA_character_, length(d))
+  ok <- !is.na(d)
+  out[ok] <- paste(format(d[ok], "%Y"), nb_month_abbr[lubridate::month(d[ok])])
+  out
 }
 
 parse_month_label <- function(x) {
-  as.Date(paste0("01-", x), format = "%d-%b-%Y")
+  x_chr <- trimws(tolower(as.character(x)))
+  out <- rep(as.Date(NA), length(x_chr))
+  ok <- !is.na(x_chr) & nzchar(x_chr)
+  if (!any(ok)) {
+    return(out)
+  }
+
+  parts <- stringr::str_match(x_chr[ok], "^([a-z]{3})-(\\d{4})$")
+  month_idx <- match(parts[, 2], nb_month_abbr)
+  valid <- !is.na(month_idx) & !is.na(parts[, 3])
+  parsed <- rep(as.Date(NA), sum(ok))
+  parsed[valid] <- as.Date(sprintf("%s-%02d-01", parts[valid, 3], month_idx[valid]))
+  out[ok] <- parsed
+  out
+}
+
+parse_month_key_nb <- function(x) {
+  x_chr <- trimws(tolower(as.character(x)))
+  out <- rep(as.Date(NA), length(x_chr))
+  ok <- !is.na(x_chr) & nzchar(x_chr)
+  if (!any(ok)) {
+    return(out)
+  }
+
+  parts <- stringr::str_match(x_chr[ok], "^(\\d{4})\\s+([a-z]{3})$")
+  month_idx <- match(parts[, 3], nb_month_abbr)
+  valid <- !is.na(month_idx) & !is.na(parts[, 2])
+  parsed <- rep(as.Date(NA), sum(ok))
+  parsed[valid] <- as.Date(sprintf("%s-%02d-01", parts[valid, 2], month_idx[valid]))
+  out[ok] <- parsed
+  out
 }
 
 season_start_year_from_date <- function(x) {
@@ -56,6 +108,29 @@ format_season_compare_label <- function(season_label, n_value) {
     season_chr
   )
   paste0(season_fmt, " (n=", scales::comma(as.integer(n_value)), ")")
+}
+
+move_named_levels_to_end <- function(levels_vec, end_levels = character()) {
+  levels_chr <- unique(as.character(levels_vec))
+  end_chr <- intersect(as.character(end_levels), levels_chr)
+  c(setdiff(levels_chr, end_chr), end_chr)
+}
+
+heatmap_axis_text_size <- function(
+  n_levels,
+  base_size = 8,
+  min_size = 5,
+  reduce_start = 12,
+  levels_per_step = 6,
+  step_size = 1
+) {
+  n_levels <- suppressWarnings(as.integer(n_levels))
+  if (!is.finite(n_levels) || is.na(n_levels) || n_levels <= reduce_start) {
+    return(base_size)
+  }
+
+  reduction <- ceiling((n_levels - reduce_start) / levels_per_step) * step_size
+  max(min_size, base_size - reduction)
 }
 
 season_window_bounds <- function(start_year) {
@@ -97,30 +172,93 @@ run_quality_window_bounds <- function(today = Sys.Date(), min_months = 6L) {
 }
 
 normalize_norwegian_text <- function(x) {
-  x_chr <- as.character(x)
-  x_chr[is.na(x_chr)] <- ""
+  if (is.factor(x)) x <- as.character(x)
+  if (!is.character(x)) return(x)
 
-  mojibake_fixes <- c(
-    "TrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¿ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â½ndelag" = "TrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ndelag",
-    "TrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ndelag" = "TrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ndelag",
-    "SÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸r-TrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ndelag" = "SÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸r-TrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ndelag",
-    "MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸re og Romsdal" = "MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸re og Romsdal",
-    "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¹ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“stfold" = "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œstfold",
-    "SÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸rlandet" = "SÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸rlandet",
-    "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¹ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“stlandet" = "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œstlandet"
+  out <- enc2utf8(x)
+  na_idx <- is.na(out)
+
+  replace_map <- c(
+    "Ãƒâ€¦" = "Å",
+    "Ã…" = "Å",
+    "ÃƒËœ" = "Ø",
+    "Ã˜" = "Ø",
+    "Ãƒâ€ " = "Æ",
+    "Ã†" = "Æ",
+    "ÃƒÂ¥" = "å",
+    "Ãƒ¥" = "å",
+    "Ã¥" = "å",
+    "ÃƒÂ¸" = "ø",
+    "Ãƒ¸" = "ø",
+    "Ã¸" = "ø",
+    "ÃƒÂ¦" = "æ",
+    "Ãƒ¦" = "æ",
+    "Ã¦" = "æ",
+    "â€“" = "-",
+    "â€”" = "-",
+    "â€˜" = "'",
+    "â€™" = "'",
+    "â€œ" = '"',
+    "â€\u009d" = '"',
+    "Â " = " ",
+    "Â" = ""
   )
 
-  out <- enc2utf8(x_chr)
-  out <- iconv(out, from = "", to = "UTF-8", sub = "")
-  out[is.na(out)] <- ""
+  repair_one <- function(text) {
+    if (is.na(text) || !nzchar(text)) {
+      return(text)
+    }
 
-  for (i in seq_along(mojibake_fixes)) {
-    out <- gsub(names(mojibake_fixes)[i], unname(mojibake_fixes[i]), out, fixed = TRUE)
+    repaired <- text
+    for (iter in seq_len(6)) {
+      previous <- repaired
+      for (i in seq_along(replace_map)) {
+        repaired <- gsub(names(replace_map)[i], unname(replace_map[i]), repaired, fixed = TRUE)
+      }
+      repaired <- trimws(repaired)
+      if (identical(repaired, previous)) {
+        break
+      }
+    }
+
+    repaired
   }
 
+  needs_repair <- !na_idx & grepl("Ã|Â|â", out)
+  if (any(needs_repair)) {
+    out[needs_repair] <- vapply(out[needs_repair], repair_one, character(1))
+  }
+  out <- trimws(out)
+  out[na_idx] <- NA_character_
   out
 }
 
+normalize_object_text <- function(x) {
+  if (is.factor(x)) {
+    normalized_values <- normalize_norwegian_text(as.character(x))
+    normalized_levels <- unique(c(normalize_norwegian_text(levels(x)), normalized_values))
+    return(factor(normalized_values, levels = normalized_levels))
+  }
+
+  if (is.character(x)) {
+    return(normalize_norwegian_text(x))
+  }
+
+  if (is.data.frame(x)) {
+    text_cols <- vapply(x, function(col) is.character(col) || is.factor(col), logical(1))
+    if (any(text_cols)) {
+      x[text_cols] <- lapply(x[text_cols], normalize_object_text)
+    }
+    return(x)
+  }
+
+  if (is.list(x) && !inherits(x, c("uneval", "formula"))) {
+    x[] <- lapply(x, normalize_object_text)
+    return(x)
+  }
+
+  x
+}
 normalize_geography_key <- function(x) {
   x_norm <- normalize_norwegian_text(x)
   x_norm <- trimws(x_norm)
@@ -375,6 +513,15 @@ fylke_to_landsdel_dictionary <- c(
   "troms og finnmark" = "Nord-Norge",
   "ukjent" = "Ukjent"
 )
+
+dictionary_values_to_utf8 <- function(x) {
+  stats::setNames(normalize_norwegian_text(unname(x)), names(x))
+}
+
+fylke_value_dictionary <- dictionary_values_to_utf8(fylke_value_dictionary)
+fylke_to_current_map_dictionary <- dictionary_values_to_utf8(fylke_to_current_map_dictionary)
+landsdel_value_dictionary <- dictionary_values_to_utf8(landsdel_value_dictionary)
+fylke_to_landsdel_dictionary <- dictionary_values_to_utf8(fylke_to_landsdel_dictionary)
 
 normalize_sex_value <- function(x) {
   x_chr <- as.character(x)
@@ -677,7 +824,7 @@ build_metadata_counts <- function(df, x_var, fill_var) {
   if (nrow(d) == 0) return(NULL)
 
   d$landsdel_label <- normalize_norwegian_text(d$landsdel_label)
-  landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "S\u00F8rlandet", "\u00D8stlandet", "Ukjent")
+  landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "Sørlandet", "Østlandet", "Ukjent")
   d
 }
 
@@ -904,8 +1051,8 @@ build_subclade_landsdel_month_heatmap <- function(
   landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "Sørlandet", "Østlandet", "Ukjent")
   d$landsdel_label <- normalize_norwegian_text(d$landsdel_label)
   d$landsdel_label <- normalize_norwegian_text(d$landsdel_label)
-  landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "S\u00F8rlandet", "\u00D8stlandet", "Ukjent")
-  landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "S\u00F8rlandet", "\u00D8stlandet", "Ukjent")
+  landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "Sørlandet", "Østlandet", "Ukjent")
+  landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "Sørlandet", "Østlandet", "Ukjent")
   present_landsdel <- unique(d$landsdel_label)
   ordered_landsdel <- c(intersect(landsdel_levels, present_landsdel), setdiff(sort(present_landsdel), landsdel_levels))
   d$landsdel_label <- factor(d$landsdel_label, levels = ordered_landsdel)
@@ -1028,7 +1175,7 @@ build_subclade_landsdel_month_bars <- function(
     )
   p_percent <- p_percent + ggplot2::labs(x = "Måned", y = "Andel av prøver (%)")
 
-  p_percent <- p_percent + ggplot2::labs(x = "M\u00E5ned", y = "Andel av pr\u00F8ver (%)")
+  p_percent <- p_percent + ggplot2::labs(x = "Måned", y = "Andel av prøver (%)")
 
   p_count <- ggplot2::ggplot(d, ggplot2::aes(x = month_date, y = n, fill = subclade_plot)) +
     ggplot2::geom_col(position = "stack") +
@@ -1051,7 +1198,7 @@ build_subclade_landsdel_month_bars <- function(
     )
   p_count <- p_count + ggplot2::labs(x = "Måned")
 
-  p_count <- p_count + ggplot2::labs(x = "M\u00E5ned")
+  p_count <- p_count + ggplot2::labs(x = "Måned")
 
   list(percent_plot = p_percent, count_plot = p_count)
 }
@@ -1077,8 +1224,9 @@ build_two_season_pie_compare <- function(
       dplyr::mutate(cat = ifelse(is.na(cat) | trimws(cat) == "", "Ukjent", cat)) %>%
       dplyr::count(cat, name = "n")
     if (nrow(d) == 0) return(NULL)
+
     total_n <- sum(d$n, na.rm = TRUE)
-    d <- d %>% dplyr::mutate(label_txt = paste0("N=", scales::comma(n)))
+    d <- d %>% dplyr::mutate(label_txt = paste0("n=", scales::comma(n)))
 
     ggplot2::ggplot(d, ggplot2::aes(x = "", y = n, fill = cat)) +
       ggplot2::geom_col(width = 1) +
@@ -1090,10 +1238,13 @@ build_two_season_pie_compare <- function(
       ggplot2::coord_polar(theta = "y") +
       ggplot2::scale_fill_manual(values = fhi_discrete_palette(dplyr::n_distinct(d$cat), palette_base)) +
       ggplot2::labs(
-        title = paste0(season_lbl, " (N=", scales::comma(total_n), ")"),
+        title = format_season_compare_label(season_lbl, total_n),
         fill = category_label
       ) +
-      ggplot2::theme_void()
+      ggplot2::theme_void() +
+      ggplot2::theme(
+        plot.title = ggplot2::element_text(hjust = 0.5, size = 10.5, face = "bold")
+      )
   }
 
   p_prev <- build_one(df, previous_label)
@@ -1348,11 +1499,15 @@ build_two_season_map_compare_shared <- function(
   if (is.null(subtitle_count_prev)) subtitle_count_prev <- nrow(prev_df)
   if (is.null(subtitle_count_curr)) subtitle_count_curr <- nrow(curr_df)
 
-  (p_prev + ggplot2::labs(subtitle = format_season_compare_label(previous_label, subtitle_count_prev))) |
-    (p_curr + ggplot2::labs(subtitle = format_season_compare_label(current_label, subtitle_count_curr)))
+  (p_prev +
+      ggplot2::labs(title = format_season_compare_label(previous_label, subtitle_count_prev), subtitle = NULL) +
+      ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5, size = 10.5, face = "bold"))) |
+    (p_curr +
+      ggplot2::labs(title = format_season_compare_label(current_label, subtitle_count_curr), subtitle = NULL) +
+      ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5, size = 10.5, face = "bold")))
 }
 
-## Numeric outlier scan (IQR-based), including numeric columns and
+## Numeric outlier scan' (IQR-based), including numeric columns and
 ## numeric-like QC fields (e.g., PCR/CT/age/WL/ID/coverage-like names).
 numeric_outlier_scan_table <- function(
   df,
@@ -1429,14 +1584,14 @@ build_ct_month_plot <- function(df, date_col, ct_col, color_col, title_txt, subt
     ggplot2::labs(
       title = title_txt,
       subtitle = subtitle_txt,
-      x = "MÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¥ned",
+      x = "Måned",
       y = "Ct-verdi",
       color = color_label
     ) +
     ggplot2::theme_minimal() +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
 
-  return(plot_obj + ggplot2::labs(x = "M\u00E5ned"))
+  return(plot_obj + ggplot2::labs(x = "Måned"))
 
   plot_obj + ggplot2::labs(x = "Måned")
 }
