@@ -1,23 +1,9 @@
-resolve_script_dir <- function() {
-  args_all <- commandArgs(trailingOnly = FALSE)
-  file_arg <- grep("^--file=", args_all, value = TRUE)
-  if (length(file_arg) > 0) {
-    script_path <- sub("^--file=", "", file_arg[1])
-    return(dirname(normalizePath(script_path, winslash = "/", mustWork = FALSE)))
-  }
-  this_file <- tryCatch(normalizePath(sys.frames()[[1]]$ofile, winslash = "/", mustWork = FALSE), error = function(e) "")
-  if (nzchar(this_file)) {
-    return(dirname(this_file))
-  }
-  normalizePath(getwd(), winslash = "/", mustWork = TRUE)
-}
+source("development/Source_files/pipeline_bootstrap.R")
+source("development/Source_files/report_export.R")
+
 bundle_scripts_dir <- resolve_script_dir()
 
 analysis_started_at <- Sys.time()
-log_timed_message <- function(...) {
-  message(sprintf("[%s]", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), " ", paste0(..., collapse = ""))
-  flush.console()
-}
 timed_step <- function(step_name, expr) {
   step_started_at <- Sys.time()
   log_timed_message("START: ", step_name)
@@ -35,27 +21,16 @@ invisible(timed_step("Source INF data cleaning script", source(file.path(bundle_
 # Setup
 # ==============================================================================
 
-# Load necessary libraries with reduced startup warning noise.
-load_required_libraries <- function(packages) {
-  lapply(packages, function(pkg) {
-    withCallingHandlers(
-      suppressPackageStartupMessages(library(pkg, character.only = TRUE)),
-      warning = function(w) {
-        if (grepl("was built under R version", conditionMessage(w), fixed = TRUE)) {
-          invokeRestart("muffleWarning")
-        }
-      }
-    )
-  })
-}
-
 required_packages <- c(
   "ggplot2", "dplyr", "cowplot", "scales", "lubridate", "kableExtra", "zoo",
   "patchwork", "stringr", "tidyr", "flextable", "officer", "knitr", "reshape2",
   "ggrepel", "tools", "rvg"
 )
-invisible(load_required_libraries(required_packages))
-invisible(timed_step("Source common report utilities", source("Source_files/common_report_utils.R")))
+invisible(init_report_pipeline(
+  required_packages = required_packages,
+  common_utils_path = "Source_files/common_report_utils.R",
+  suppress_startup = TRUE
+))
 plot_run_quality_stacked <- function(
   run_quality_df,
   y_var = c("percent", "n"),
@@ -121,6 +96,31 @@ plot_run_quality_stacked <- function(
 Sys.setlocale("LC_TIME", "nb_NO.utf8")
 export_graph_f <- read_pptx()
 excel_export_sheets <- list()
+report_week <- lubridate::isoweek(Sys.Date())
+report_year <- lubridate::year(Sys.Date())
+inf_section_titles <- c(
+  "Data completeness og issues",
+  "GISAID-submisjon per run",
+  "Prøvetabeller",
+  "Influensafrekvens",
+  "Klade- og subkladeplott",
+  "Antiviral resistens",
+  "HA-mutasjoner",
+  "Glykosylering",
+  "Frameshift, insersjoner og delesjoner",
+  "Pasientpopulasjon under overvåking"
+)
+
+export_graph_f <- add_report_title_slide(
+  export_graph_f,
+  report_title = "Influensaovervåking",
+  report_subtitle = paste0("Uke ", report_week, " - ", report_year),
+  slide_title = paste0("Influensa Uke ", report_week)
+)
+export_graph_f <- add_report_index_slide(
+  export_graph_f,
+  section_titles = inf_section_titles
+)
 
 axis_count_label <- "Antall (n)"
 axis_share_label <- "Andel (%)"
@@ -139,55 +139,6 @@ flu_subtype_sheet_stubs <- c(
   "A/H3N2" = "H3",
   "B/Victoria" = "BVic"
 )
-# PowerPoint export wrappers keep slide titles close to each output call and
-# make the report flow easier to trace when we compare code against slides.
-normalize_slide_title <- function(title_value, fallback_title) {
-  if (is.null(title_value) || length(title_value) == 0) {
-    return(fallback_title)
-  }
-
-  title_chr <- trimws(paste(as.character(title_value), collapse = " "))
-  if (!nzchar(title_chr) || identical(title_chr, "NULL")) {
-    return(fallback_title)
-  }
-
-  title_chr
-}
-
-add_section_output <- function(presentation, section_title, section_subtitle = NULL) {
-  add_section_slide(presentation, section_title, section_subtitle)
-}
-
-add_table_output <- function(presentation, table_obj, slide_title = NULL, title = NULL) {
-  if (is.null(table_obj)) {
-    return(presentation)
-  }
-
-  resolved_title <- normalize_slide_title(
-    if (!is.null(slide_title)) slide_title else title,
-    "Tabell uten tittel"
-  )
-  save_table_to_ppt(presentation, table_obj, resolved_title)
-}
-
-add_plot_output <- function(presentation, plot_obj, slide_title = NULL, title = NULL) {
-  if (is.null(plot_obj)) {
-    return(presentation)
-  }
-
-  resolved_title <- slide_title
-  if (is.null(resolved_title) || length(resolved_title) == 0) {
-    resolved_title <- title
-  }
-  if (is.null(resolved_title) || length(resolved_title) == 0) {
-    plot_label_title <- tryCatch(plot_obj$labels$title, error = function(e) NULL)
-    resolved_title <- plot_label_title
-  }
-  resolved_title <- normalize_slide_title(resolved_title, "Figur uten tittel")
-
-  save_plot_to_ppt(presentation, plot_obj, title = resolved_title)
-}
-
 # ==============================================================================
 # Functions
 # ==============================================================================
@@ -2445,7 +2396,7 @@ for (current_subtype in ha_mutation_subtype_order) {
       mutate(month_label = factor(month_label, levels = rev(all_subtype_month_labels))) %>%
       arrange(month_date, mutation_profile) %>%
       select(
-        Måned = month_label,
+        Month = month_label,
         Mutasjonsprofil = mutation_profile,
         Antall = count,
         Totalt_subtype = total_subtype,
@@ -2455,7 +2406,7 @@ for (current_subtype in ha_mutation_subtype_order) {
     subclade_line_data <- subclade_long %>%
       arrange(month_date, mutation_profile) %>%
       transmute(
-        Måned = as.character(month_label),
+        Month = as.character(month_label),
         Dato = month_date,
         Mutasjonsprofil = mutation_profile,
         Antall = count,
@@ -3157,10 +3108,21 @@ export_graph_f <- add_section_output(
   "Mutasjonsvarmekart per gen og subtype"
 )
 
-# Step 1: Filter the dataset for relevant subtypes and select columns
+# Step 1: Filter the dataset for relevant subtypes, keep the last 6 months, and select columns
+heatmap_month_window_start <- floor_date(Sys.Date() %m-% months(5), unit = "month")
+
 filtered_fludb <- fludb %>%
-  filter(ngs_sekvens_resultat %in% flu_reportable_subtypes) %>%
+  mutate(
+    month_date = floor_date(as.Date(prove_tatt), unit = "month"),
+    month_year = format_month_label(month_date)
+  ) %>%
+  filter(
+    ngs_sekvens_resultat %in% flu_reportable_subtypes,
+    !is.na(month_date),
+    month_date >= heatmap_month_window_start
+  ) %>%
   select(
+    month_date,
     month_year,
     ngs_sekvens_resultat,
     "nc_ha_frameshift",
@@ -3223,109 +3185,119 @@ mutation_columns <- c(
   "nc_ns_deletion"
 )
 
+clean_heatmap_mutation_values <- function(x) {
+  vals <- trimws(as.character(x))
+  vals[is.na(vals)] <- ""
+  vals[vals %in% c("", "NA", "N/A", "<NA>")] <- ""
+  vals[grepl("^No", vals, ignore.case = TRUE)] <- ""
+  vals
+}
+
 # Step 2: Create individual mutation counts for specified mutation types
 create_individual_counts <- function(data, mutation_col) {
   data %>%
-    separate_rows(!!sym(mutation_col), sep = ";") %>% # Split the specified column into separate rows
-    filter(!is.na(!!sym(mutation_col)) & !!sym(mutation_col) != "") %>% # Remove empty strings and NAs
-    group_by(month_year, ngs_sekvens_resultat, !!sym(mutation_col)) %>% # Group by relevant columns
-    summarise(n = n(), .groups = "drop") # Count occurrences of each mutation
+    mutate(mutation_value = clean_heatmap_mutation_values(.data[[mutation_col]])) %>%
+    filter(mutation_value != "") %>%
+    tidyr::separate_rows(mutation_value, sep = ";") %>%
+    mutate(mutation_value = trimws(mutation_value)) %>%
+    filter(
+      mutation_value != "",
+      !mutation_value %in% c("NA", "N/A", "<NA>"),
+      !grepl("^No", mutation_value, ignore.case = TRUE)
+    ) %>%
+    group_by(month_date, month_year, ngs_sekvens_resultat, mutation_value) %>%
+    summarise(n = n(), .groups = "drop") %>%
+    mutate(!!mutation_col := mutation_value) %>%
+    select(-mutation_value)
 }
 
 # Step 3: Create total counts for each month and subtype for each mutation type
 create_subtcount <- function(data) {
   data %>%
-    group_by(month_year, ngs_sekvens_resultat) %>%
-    summarise(total = n(), .groups = "drop") # Total counts of records
+    group_by(month_date, month_year, ngs_sekvens_resultat) %>%
+    summarise(total = n(), .groups = "drop")
 }
 
 # Step 4: Calculate percentages for each mutation type
-calculate_percentages <- function(
-  individual_data,
-  subtcount_data,
-  mutation_col
-) {
+calculate_percentages <- function(individual_data, subtcount_data, mutation_col) {
   individual_data %>%
-    left_join(subtcount_data, by = c("month_year", "ngs_sekvens_resultat")) %>% # Join total counts
-    mutate(
-      percent = (n / total) * 100, # Calculate percentage
-      Sampledate = as.Date(
-        paste0(sub("-", " ", month_year), " 01"),
-        format = "%b %Y %d"
-      ) # Create a date for plotting
-    ) %>%
+    left_join(subtcount_data, by = c("month_date", "month_year", "ngs_sekvens_resultat")) %>%
+    mutate(percent = (n / total) * 100, Sampledate = month_date) %>%
     select(
       Sampledate,
+      month_date,
       month_year,
       ngs_sekvens_resultat,
       !!sym(mutation_col),
       n,
       total,
       percent
-    ) # Select relevant columns
+    )
 }
 
 # Step 5: Extract the numeric part from mutation for sorting
 extract_numeric_and_sort <- function(data, mutation_col) {
   data %>%
     mutate(
-      mutation_numeric = suppressWarnings(as.numeric(
-        str_extract(!!sym(mutation_col), "(?<=:)\\d+(?=:)")
-      )), # Extract numeric value when present
-      mutation_type = gsub(":.*", "", !!sym(mutation_col)) # Extract type (if applicable)
+      mutation_numeric = suppressWarnings(as.numeric(str_extract(.data[[mutation_col]], "\\d+"))),
+      mutation_type = gsub(":.*", "", .data[[mutation_col]])
     ) %>%
-    arrange(mutation_type, mutation_numeric) # Arrange first by type and then by numeric value
+    arrange(mutation_type, mutation_numeric, .data[[mutation_col]])
 }
 
-# Step 6: Create varmekarts for each mutation type
+# Step 6: Create heatmaps for each mutation type with adaptive axis text sizing
 create_varmekart <- function(data, title, mutation_col) {
   plot_data <- data %>%
-    mutate(
-      mutation_label = normalize_mutation_site_label(.data[[mutation_col]]),
-      mutation_label = factor(mutation_label, levels = unique(mutation_label))
+    mutate(mutation_label = normalize_mutation_site_label(.data[[mutation_col]])) %>%
+    filter(
+      !is.na(mutation_label),
+      mutation_label != "",
+      !mutation_label %in% c("NA", "N/A", "<NA>"),
+      !grepl("^No", mutation_label, ignore.case = TRUE)
     )
 
+  if (nrow(plot_data) == 0) return(NULL)
+
+  mutation_levels <- plot_data %>%
+    distinct(mutation_label, mutation_numeric, mutation_type) %>%
+    arrange(mutation_type, mutation_numeric, mutation_label) %>%
+    pull(mutation_label)
+
+  month_levels_n <- dplyr::n_distinct(plot_data$Sampledate)
+  y_text_size <- heatmap_axis_text_size(length(mutation_levels), base_size = 8, min_size = 4)
+  x_text_size <- heatmap_axis_text_size(month_levels_n, base_size = 8, min_size = 6, reduce_start = 6, levels_per_step = 2)
+
+  plot_data <- plot_data %>%
+    mutate(mutation_label = factor(mutation_label, levels = mutation_levels))
+
   ggplot(plot_data, aes(x = Sampledate, y = mutation_label, fill = percent)) +
-    geom_tile(color = NA) + # Create tiles for the varmekart
-    facet_wrap(~ngs_sekvens_resultat, scales = "free_y") + # Create facets for each subtype
-    scale_fill_gradientn(
-      colors = kvantitativ_b1,
-      labels = percent_format(scale = 1)
-    ) + # Use kvantitativ_b1 color scale
-    scale_x_date(
-      labels = format_month_label,
-      breaks = scales::date_breaks("1 month")
-    ) + # Format x-axis as des-2025
+    geom_tile(color = NA) +
+    facet_wrap(~ngs_sekvens_resultat, scales = "free_y") +
+    scale_fill_gradientn(colors = kvantitativ_b1, labels = percent_format(scale = 1)) +
+    scale_x_date(labels = format_month_label, breaks = scales::date_breaks("1 month")) +
     labs(title = title, x = "", y = "Mutasjonssteder", fill = "Prosent") +
-    theme_minimal() + # Use minimal theme for clarity
-    theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Rotate x-axis text for better readability
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = x_text_size),
+      axis.text.y = element_text(size = y_text_size)
+    )
 }
 
 # Output: mutation-panel heatmaps are exported one slide per mutation type.
-# Loop through each mutation type and generate varmekarts
 for (mutation in mutation_columns) {
-  # Create individual counts
   individual_counts <- create_individual_counts(filtered_fludb, mutation)
+  if (nrow(individual_counts) == 0) next
 
-  # Create total counts for the mutation type
   subtcount <- create_subtcount(filtered_fludb)
-
-  # Calculate percentages
-  individual_percent <- calculate_percentages(
-    individual_counts,
-    subtcount,
-    mutation
-  )
-
-  # Extract numeric values and sort
+  individual_percent <- calculate_percentages(individual_counts, subtcount, mutation)
   sorted_data <- extract_numeric_and_sort(individual_percent, mutation)
 
-  # Create and print varmekart
-  varmekart_title <- format_mutation_panel_title(mutation)
+  varmekart_title <- paste0(format_mutation_panel_title(mutation), " (siste 6 mnd)")
   varmekart <- create_varmekart(sorted_data, varmekart_title, mutation)
-  export_graph_f <- add_plot_output(export_graph_f, varmekart, title = varmekart_title)
+  if (!is.null(varmekart)) {
+    export_graph_f <- add_plot_output(export_graph_f, varmekart, title = varmekart_title)
+  }
 }
-
 # ==============================================================================
 # Exported patient surveillance outputs
 # ==============================================================================
@@ -3753,4 +3725,3 @@ cat(
 )
 total_elapsed_sec <- as.numeric(difftime(Sys.time(), analysis_started_at, units = "secs"))
 log_timed_message("TOTAL RUNTIME: ", sprintf("%.2f", total_elapsed_sec), "s")
-

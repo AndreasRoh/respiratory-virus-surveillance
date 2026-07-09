@@ -2,14 +2,14 @@
 # Self-contained script intended for sourcing by analysis/orchestration scripts.
 # Responsibility: load raw SQL tables, apply duplicate-column harmonization, and output raw merged dataframe only.
 
-suppressPackageStartupMessages({
+suppressPackageStartupMessages(suppressWarnings({
   library(dplyr)
   library(tidyr)
   library(stringr)
   library(janitor)
   library(lubridate)
   library(dbplyr)
-})
+}))
 
 sql_address_local <- Sys.getenv(
   "RSV_SQL_ADDRESS_FILE",

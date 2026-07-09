@@ -7,19 +7,9 @@
 # Date: 29.04.2026
 # ============================================================================
 
-resolve_script_dir <- function() {
-  args_all <- commandArgs(trailingOnly = FALSE)
-  file_arg <- grep("^--file=", args_all, value = TRUE)
-  if (length(file_arg) > 0) {
-    script_path <- sub("^--file=", "", file_arg[1])
-    return(dirname(normalizePath(script_path, winslash = "/", mustWork = FALSE)))
-  }
-  this_file <- tryCatch(normalizePath(sys.frames()[[1]]$ofile, winslash = "/", mustWork = FALSE), error = function(e) "")
-  if (nzchar(this_file)) {
-    return(dirname(this_file))
-  }
-  normalizePath(getwd(), winslash = "/", mustWork = TRUE)
-}
+source("development/Source_files/pipeline_bootstrap.R")
+source("development/Source_files/report_export.R")
+
 bundle_scripts_dir <- resolve_script_dir()
 default_results_root <- "N:/Virologi/Influensa/2526/WGS_Analyse/Results"
 results_root <- Sys.getenv("SC2_RESULTS_DIR", unset = default_results_root)
@@ -33,30 +23,6 @@ results_share_dir <- Sys.getenv(
 # SETUP - Install and load required packages
 # ============================================================================
 
-# Function to check, update, and install packages
-check_install_update_packages <- function(packages) {
-  installed_pkgs <- rownames(installed.packages())
-  missing_packages <- setdiff(packages, installed_pkgs)
-  if (length(missing_packages) > 0) {
-    message("Installing missing packages: ", paste(missing_packages, collapse = ", "))
-    install.packages(missing_packages, dependencies = TRUE)
-  }
-
-  # Avoid in-session package updates: they can fail on Windows due to locked DLLs
-  # and can trigger namespace unload conflicts (e.g., DBI imported by odbc/RSQLite).
-  if (isTRUE(getOption("sc2_update_packages", FALSE))) {
-    outdated_packages <- old.packages()
-    if (!is.null(outdated_packages)) {
-      outdated_required <- intersect(rownames(outdated_packages), packages)
-      if (length(outdated_required) > 0) {
-        message("Updating outdated required packages: ", paste(outdated_required, collapse = ", "))
-        update.packages(oldPkgs = outdated_required, ask = FALSE, checkBuilt = TRUE)
-      }
-    }
-  }
-}
-
-# List of required packages
 required_packages <- c(
   "odbc", "RSQLite", "DBI", "tidyverse", "lubridate", "ggrepel", "scales",
   "openxlsx", "RColorBrewer", "officer", "tsibble", "patchwork",
@@ -64,75 +30,24 @@ required_packages <- c(
   "data.table", "tools", "knitr"
 )
 
-# Use CRAN mirror in Germany for package installs/updates.
 options(repos = c(CRAN = "https://cran.uni-muenster.de/"))
-
-# Show warnings immediately and keep error messages visible in terminal.
 options(warn = 1, show.error.messages = TRUE)
 
-# Locale guard: set UTF-8 Norwegian locale as early as possible for stable
-# rendering of Norwegian characters in plots and slide titles.
-init_locale <- function() {
-  locale_candidates <- c("nb_NO.UTF-8", "Norwegian (Bokmal)_Norway.utf8", "Norwegian")
-  for (loc in locale_candidates) {
-    ok <- tryCatch(Sys.setlocale(category = "LC_ALL", locale = loc), error = function(e) NA_character_)
-    if (!is.na(ok) && nzchar(ok)) {
-      message("Locale set to: ", ok)
-      return(invisible(ok))
-    }
-  }
-  warning("Could not set Norwegian UTF-8 locale; continuing with system default locale.")
-  invisible(NA_character_)
-}
-init_locale()
-
-# Restore terminal output if previous runs left active sinks.
-while (sink.number() > 0) sink()
-while (sink.number(type = "message") != 2) sink(type = "message")
-
+invisible(init_locale())
+invisible(reset_output_sinks())
 analysis_started_at <- Sys.time()
-log_timed_message <- function(...) {
-  message(sprintf("[%s]", format(Sys.time(), "%Y-%m-%d %H:%M:%S")), " ", paste0(..., collapse = ""))
-  flush.console()
-}
-timed_step <- function(step_name, expr) {
-  step_started_at <- Sys.time()
-  log_timed_message("START: ", step_name)
-  result <- force(expr)
-  step_elapsed <- as.numeric(difftime(Sys.time(), step_started_at, units = "secs"))
-  log_timed_message("DONE: ", step_name, " (", sprintf("%.2f", step_elapsed), "s)")
-  result
-}
 
-load_required_libraries <- function(packages) {
-  lapply(packages, function(pkg) {
-    withCallingHandlers(
-      library(pkg, character.only = TRUE),
-      warning = function(w) {
-        if (grepl("was built under R version", conditionMessage(w), fixed = TRUE)) {
-          invokeRestart("muffleWarning")
-        }
-      }
-    )
-  })
-}
-
-# Call the function to install and update packages
 invisible(timed_step("Package install/update", check_install_update_packages(required_packages)))
-
-# Load libraries
-invisible(timed_step("Load libraries", load_required_libraries(required_packages)))
-invisible(utils::globalVariables(c(
-  ".", ".data", "Tessy_plot", "plot_date", "age_value", "age_group_plot",
-  "age_group_raw", "prove_kategori_group", "group_plot", "n", "n_raw",
-  "tessy_n", "percent", "kvalitativ_a", "sc2_palette"
-)))
-
-# Set data.table week option to legacy mode to maintain current behavior
-options(datatable.week = "legacy")
-
-# Execute shared report utilities (includes FHI palettes).
-invisible(timed_step("Source common report utilities", source("Source_files/common_report_utils.R")))
+invisible(init_report_pipeline(
+  required_packages = required_packages,
+  common_utils_path = "Source_files/common_report_utils.R",
+  set_datatable_legacy = TRUE,
+  global_vars = c(
+    ".", ".data", "Tessy_plot", "plot_date", "age_value", "age_group_plot",
+    "age_group_raw", "prove_kategori_group", "group_plot", "n", "n_raw",
+    "tessy_n", "percent", "kvalitativ_a", "sc2_palette"
+  )
+))
 if (!exists("fhi_discrete_palette", mode = "function")) {
   fhi_discrete_palette <- function(n, palette_name = NULL) {
     base_palette <- if (exists("kvalitativ_comb", inherits = TRUE)) {
@@ -646,46 +561,25 @@ add_section_slide <- function(presentation, section_title, section_subtitle = NU
 
 current_week_title <- week(Sys.Date())
 current_year_title <- year(Sys.Date())
-title_plot <- ggplot() +
-  coord_cartesian(xlim = c(0, 1), ylim = c(0, 1), expand = FALSE, clip = "off") +
-  scale_x_continuous(NULL, breaks = NULL) +
-  scale_y_continuous(NULL, breaks = NULL) +
-  annotate("text", x = 0.5, y = 0.60, label = "SARS-CoV-2-overv\u00E5king", size = 13, fontface = "bold", family = "sans") +
-  annotate("text", x = 0.5, y = 0.42, label = paste0("Uke ", current_week_title, " - ", current_year_title), size = 8, family = "sans") +
-  theme_void() +
-  theme(
-    panel.grid = element_blank(),
-    axis.text = element_blank(),
-    axis.title = element_blank(),
-    axis.ticks = element_blank()
-  )
-
-export_graph <- export_to_ppt(export_graph, title_plot, paste0("SARS-CoV-2 Uke ", current_week_title))
-index_topics <- c(
-  "Datakvalitet og runkvalitet",
+sc2_section_titles <- c(
+  "Datakvalitet",
+  "Runkvalitet",
   "Sekvensering og dekning",
   "Pangolin og Tessy",
-  "Mutasjoner og indeler",
-  "PCR CT og pasientdata",
+  "Mutasjoner",
+  "Pasientdata",
   "Fylker og resistens"
 )
-index_plot <- ggplot() +
-  coord_cartesian(xlim = c(0, 1), ylim = c(0, 1), expand = FALSE, clip = "off") +
-  scale_x_continuous(NULL, breaks = NULL) +
-  scale_y_continuous(NULL, breaks = NULL) +
-  annotate("text", x = 0.10, y = 0.88, label = paste(paste0(seq_along(index_topics), ". ", index_topics), collapse = "\n"), hjust = 0, vjust = 1, size = 5.2, family = "sans") +
-  theme_void() +
-  theme(
-    panel.grid = element_blank(),
-    axis.text = element_blank(),
-    axis.title = element_blank(),
-    axis.ticks = element_blank()
-  )
-export_graph <- export_to_ppt(
+export_graph <- add_report_title_slide(
   export_graph,
-  index_plot,
-  "Rapportindeks",
-  "Kort oversikt over hovedseksjonene i ukesrapporten"
+  report_title = "SARS-CoV-2-overvåking",
+  report_subtitle = paste0("Uke ", current_week_title, " - ", current_year_title),
+  slide_title = paste0("SARS-CoV-2 Uke ", current_week_title)
+)
+export_graph <- add_report_index_slide(
+  export_graph,
+  section_titles = sc2_section_titles,
+  slide_subtitle = "Kort oversikt over hovedseksjonene i ukesrapporten"
 )
 export_graph <- add_section_slide(
   export_graph,
@@ -3068,4 +2962,3 @@ log_timed_message("Share PPTX path: ", share_written_path)
 
 total_elapsed_sec <- as.numeric(difftime(Sys.time(), analysis_started_at, units = "secs"))
 log_timed_message("TOTAL RUNTIME: ", sprintf("%.2f", total_elapsed_sec), "s")
-

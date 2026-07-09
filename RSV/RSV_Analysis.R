@@ -1,42 +1,20 @@
-resolve_script_dir <- function() {
-  args_all <- commandArgs(trailingOnly = FALSE)
-  file_arg <- grep('^--file=', args_all, value = TRUE)
-  if (length(file_arg) > 0) {
-    script_path <- sub('^--file=', '', file_arg[1])
-    return(dirname(normalizePath(script_path, winslash = '/', mustWork = FALSE)))
-  }
-  normalizePath(getwd(), winslash = '/', mustWork = TRUE)
-}
+source("development/Source_files/pipeline_bootstrap.R")
+source("development/Source_files/report_export.R")
 
 bundle_scripts_dir <- resolve_script_dir()
 analysis_started_at <- Sys.time()
-log_timed_message <- function(...) {
-  message(sprintf('[%s]', format(Sys.time(), '%Y-%m-%d %H:%M:%S')), ' ', paste0(..., collapse = ''))
-  flush.console()
-}
-timed_step <- function(step_name, expr) {
-  step_started_at <- Sys.time()
-  log_timed_message('START: ', step_name)
-  result <- force(expr)
-  step_elapsed <- as.numeric(difftime(Sys.time(), step_started_at, units = 'secs'))
-  log_timed_message('DONE: ', step_name, ' (', sprintf('%.2f', step_elapsed), 's)')
-  result
-}
 
 invisible(timed_step('Source RSV SQL query', source(file.path(bundle_scripts_dir, 'RSV_SQLquery.R'))))
 
 invisible(timed_step('Source RSV data cleaning', source(file.path(bundle_scripts_dir, 'RSV_DataCleaning_23-24.R'))))
 
-library(dplyr)
-library(ggplot2)
-library(lubridate)
-library(tidyr)
-library(scales)
-library(officer)
-library(openxlsx)
-library(patchwork)
-
-invisible(timed_step('Source common report utilities', source('Source_files/common_report_utils.R')))
+required_packages <- c(
+  "dplyr", "ggplot2", "lubridate", "tidyr", "scales", "officer", "openxlsx", "patchwork"
+)
+invisible(init_report_pipeline(
+  required_packages = required_packages,
+  common_utils_path = "Source_files/common_report_utils.R"
+))
 
 Sys.setlocale('LC_TIME', 'nb_NO.utf8')
 
@@ -89,11 +67,27 @@ month_levels <- rsvdb %>%
 
 export_graph_f <- read_pptx()
 excel_export_sheets <- list()
+report_week <- lubridate::isoweek(Sys.Date())
+report_year <- lubridate::year(Sys.Date())
+rsv_section_titles <- c(
+  "Data completeness og issues",
+  "Run quality issues",
+  "RSV A/B per måned",
+  "Pasient aldersgruppe piesammenligning",
+  "Pasient landsdel og subklade",
+  "Pasientstatus og kjønn",
+  "Frameshift, insersjoner og delesjoner"
+)
 
-export_graph_f <- add_section_slide(
+export_graph_f <- add_report_title_slide(
   export_graph_f,
-  'RSV analyse',
-  paste('Rapport med to perioder:', 'Hele tidslinjen', 'og', current_season_label, '(forrige:', previous_season_label, ')')
+  report_title = "RSV-overvåking",
+  report_subtitle = paste0("Uke ", report_week, " - ", report_year),
+  slide_title = paste0("RSV Uke ", report_week)
+)
+export_graph_f <- add_report_index_slide(
+  export_graph_f,
+  section_titles = rsv_section_titles
 )
 
 # ------------------------------------------------------------------------------
@@ -129,7 +123,7 @@ qc_issues <- list(
 
 qc_summary <- data.frame(metric = names(qc_issues), value = as.numeric(unlist(qc_issues))) %>% arrange(desc(value))
 
-export_graph_f <- save_table_to_ppt(export_graph_f, head(column_profile, 30), 'RSV kolonner med hÃ¸yest manglende andel')
+export_graph_f <- save_table_to_ppt(export_graph_f, head(column_profile, 30), 'RSV kolonner med høyest manglende andel')
 export_graph_f <- save_table_to_ppt(export_graph_f, qc_summary, 'RSV data quality summary')
 
 excel_export_sheets[['data_completeness']] <- column_profile
@@ -176,7 +170,7 @@ excel_export_sheets[['run_qc_counts']] <- if (is.null(run_quality_rsv)) data.fra
 # ------------------------------------------------------------------------------
 export_graph_f <- add_section_slide(
   export_graph_f,
-  'Seksjon: RSV A/B per mÃ¥ned',
+  'Seksjon: RSV A/B per måned',
   paste0('Antall og andel - ', current_season_label)
 )
 
@@ -189,7 +183,7 @@ if (nrow(rsv_ab_month) > 0) {
     geom_col() +
     scale_fill_manual(values = fhi_discrete_palette(dplyr::n_distinct(rsv_ab_month$subtype_group), kvalitativ_comb)) +
     scale_x_date(labels = format_month_label, breaks = scales::date_breaks('1 month')) +
-    labs(title = paste0('RSV A/B per mÃ¥ned (antall) - ', current_season_label), x = 'mÃ¥ned', y = 'Antall (n)', fill = 'Subtype') +
+    labs(title = paste0('RSV A/B per måned (antall) - ', current_season_label), x = 'måned', y = 'Antall (n)', fill = 'Subtype') +
     theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
   p_ab_pct <- rsv_ab_month %>%
@@ -199,10 +193,10 @@ if (nrow(rsv_ab_month) > 0) {
     scale_fill_manual(values = fhi_discrete_palette(dplyr::n_distinct(rsv_ab_month$subtype_group), kvalitativ_comb)) +
     scale_x_date(labels = format_month_label, breaks = scales::date_breaks('1 month')) +
     scale_y_continuous(labels = percent_format(scale = 1)) +
-    labs(title = paste0('RSV A/B per mÃ¥ned (andel) - ', current_season_label), x = 'mÃ¥ned', y = 'Andel (%)', fill = 'Subtype') +
+    labs(title = paste0('RSV A/B per måned (andel) - ', current_season_label), x = 'måned', y = 'Andel (%)', fill = 'Subtype') +
     theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-  export_graph_f <- save_plot_to_ppt(export_graph_f, (p_ab_n | p_ab_pct) + plot_layout(guides = 'collect') & theme(legend.position = 'bottom'), title = paste0('RSV A/B per mÃ¥ned - antall + andel (', current_season_label, ')'))
+  export_graph_f <- save_plot_to_ppt(export_graph_f, (p_ab_n | p_ab_pct) + plot_layout(guides = 'collect') & theme(legend.position = 'bottom'), title = paste0('RSV A/B per måned - antall + andel (', current_season_label, ')'))
 }
 
 for (subtype_id in c('RSVA', 'RSVB')) {
@@ -213,7 +207,7 @@ for (subtype_id in c('RSVA', 'RSVB')) {
     geom_col() +
     scale_fill_manual(values = fhi_discrete_palette(dplyr::n_distinct(d$subclade_plot), kvalitativ_comb)) +
     scale_x_date(labels = format_month_label, breaks = scales::date_breaks('1 month')) +
-    labs(title = paste0(subtype_id, ' by subclade per mÃ¥ned (antall) - ', current_season_label), x = 'mÃ¥ned', y = 'Antall (n)', fill = 'Subclade') +
+    labs(title = paste0(subtype_id, ' by subclade per måned (antall) - ', current_season_label), x = 'måned', y = 'Antall (n)', fill = 'Subclade') +
     theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
   p_pct <- d %>%
@@ -223,10 +217,10 @@ for (subtype_id in c('RSVA', 'RSVB')) {
     scale_fill_manual(values = fhi_discrete_palette(dplyr::n_distinct(d$subclade_plot), kvalitativ_comb)) +
     scale_x_date(labels = format_month_label, breaks = scales::date_breaks('1 month')) +
     scale_y_continuous(labels = percent_format(scale = 1)) +
-    labs(title = paste0(subtype_id, ' by subclade per mÃ¥ned (andel) - ', current_season_label), x = 'mÃ¥ned', y = 'Andel (%)', fill = 'Subclade') +
+    labs(title = paste0(subtype_id, ' by subclade per måned (andel) - ', current_season_label), x = 'måned', y = 'Andel (%)', fill = 'Subclade') +
     theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-  export_graph_f <- save_plot_to_ppt(export_graph_f, (p_n | p_pct) + plot_layout(guides = 'collect') & theme(legend.position = 'bottom'), title = paste0(subtype_id, ' by subclade per mÃ¥ned - antall + andel (', current_season_label, ')'))
+  export_graph_f <- save_plot_to_ppt(export_graph_f, (p_n | p_pct) + plot_layout(guides = 'collect') & theme(legend.position = 'bottom'), title = paste0(subtype_id, ' by subclade per måned - antall + andel (', current_season_label, ')'))
 }
 
 excel_export_sheets[['current_season_ab_monthly']] <- rsv_ab_month
@@ -352,7 +346,7 @@ if (all(c('prove_tatt', 'subtype_group', 'subclade_plot') %in% names(rsvdb))) {
 export_graph_f <- add_section_slide(
   export_graph_f,
   'Seksjon: Frameshift, insersjoner og delesjoner',
-  'Gene per mÃ¥ned, facettert per RSVA/RSVB'
+  'Gene per måned, facettert per RSVA/RSVB'
 )
 
 rsv_indel_date_col <- intersect(c('prove_tatt', 'sample_date', 'Sampledate'), names(rsvdb))[1]
@@ -406,7 +400,7 @@ if (!is.na(rsv_indel_date_col) && length(rsv_indel_cols) > 0) {
       facet_wrap(~ subtype_group, ncol = 1, scales = 'free_y') +
       scale_fill_gradientn(colors = kvantitativ_b1, labels = percent_format(scale = 1)) +
       scale_x_date(labels = format_month_label, breaks = scales::date_breaks('1 month')) +
-      labs(title = 'Frameshift/Insertion/Deletion andel over tid for RSV (gene-nivÃ¥)', subtitle = 'Facettert per RSVA/RSVB', x = '', y = 'RSV-gen', fill = 'Prosent') +
+      labs(title = 'Frameshift/Insertion/Deletion andel over tid for RSV (gene-nivå)', subtitle = 'Facettert per RSVA/RSVB', x = '', y = 'RSV-gen', fill = 'Prosent') +
       theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
     export_graph_f <- save_plot_to_ppt(export_graph_f, p_indel, title = 'RSV indel/frameshift trender per gen (facettert)')
@@ -439,4 +433,3 @@ cat(sprintf('PowerPoint lagret med %d lysbilder (lysbilde 1-%d):\n- %s\n- %s\n',
 
 elapsed_total <- as.numeric(difftime(Sys.time(), analysis_started_at, units = 'secs'))
 log_timed_message('TOTAL RUNTIME: ', sprintf('%.2f', elapsed_total), 's')
-

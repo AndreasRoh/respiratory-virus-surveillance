@@ -2,12 +2,12 @@
 # Self-contained script intended for sourcing by analysis/orchestration scripts.
 # Responsibility: load raw SQL tables, apply duplicate-column harmonization, and output raw merged dataframe only.
 
-suppressPackageStartupMessages({
+suppressPackageStartupMessages(suppressWarnings({
   library(dplyr)
   library(tidyr)
   library(janitor)
   library(dbplyr)
-})
+}))
 
 disconnect_if_valid <- function(con_obj) {
   if (inherits(con_obj, "DBIConnection")) {

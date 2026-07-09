@@ -175,58 +175,33 @@ normalize_norwegian_text <- function(x) {
   if (is.factor(x)) x <- as.character(x)
   if (!is.character(x)) return(x)
 
+  u <- function(...) intToUtf8(c(...))
   out <- enc2utf8(x)
   na_idx <- is.na(out)
-
-  replace_map <- c(
-    "Ãƒâ€¦" = "Å",
-    "Ã…" = "Å",
-    "ÃƒËœ" = "Ø",
-    "Ã˜" = "Ø",
-    "Ãƒâ€ " = "Æ",
-    "Ã†" = "Æ",
-    "ÃƒÂ¥" = "å",
-    "Ãƒ¥" = "å",
-    "Ã¥" = "å",
-    "ÃƒÂ¸" = "ø",
-    "Ãƒ¸" = "ø",
-    "Ã¸" = "ø",
-    "ÃƒÂ¦" = "æ",
-    "Ãƒ¦" = "æ",
-    "Ã¦" = "æ",
-    "â€“" = "-",
-    "â€”" = "-",
-    "â€˜" = "'",
-    "â€™" = "'",
-    "â€œ" = '"',
-    "â€\u009d" = '"',
-    "Â " = " ",
-    "Â" = ""
+  replacements <- setNames(
+    c(
+      "\u00E5", "\u00F8", "\u00E6", "\u00D8",
+      "p\u00E5", "m\u00E5ned", "M\u00E5ned", "m\u00E5neder",
+      "M\u00F8re og Romsdal", "M\u00F8re", "m\u00F8re", "Tr\u00F8ndelag", "\u00D8stfold",
+      "pr\u00F8ve", "Pr\u00F8ve", "pr\u00F8ver", "Pr\u00F8ver",
+      "h\u00F8yest", "H\u00F8yest", "best\u00E5tt", "Best\u00E5tt",
+      "overv\u00E5king", "Overv\u00E5king", "Kj\u00F8nn", "kj\u00F8nn",
+      "n\u00E5v\u00E6rende", "N\u00E5v\u00E6rende", "S\u00F8rlandet", "\u00D8stlandet",
+      "\u00F8verst", "niv\u00E5"
+    ),
+    c(
+      u(0x00C3,0x00A5), u(0x00C3,0x00B8), u(0x00C3,0x00A6), u(0x00C3,0x02DC),
+      paste0("p", u(0x00C3,0x00A5)), paste0("m", u(0x00C3,0x00A5), "ned"), paste0("M", u(0x00C3,0x00A5), "ned"), paste0("m", u(0x00C3,0x00A5), "neder"),
+      paste0("M", u(0x00C3,0x00B8), "re og Romsdal"), paste0("M", u(0x00C3,0x00B8), "re"), paste0("m", u(0x00C3,0x00B8), "re"), paste0("Tr", u(0x00C3,0x00B8), "ndelag"), paste0(u(0x00C3,0x02DC), "stfold"),
+      paste0("pr", u(0x00C3,0x00B8), "ve"), paste0("Pr", u(0x00C3,0x00B8), "ve"), paste0("pr", u(0x00C3,0x00B8), "ver"), paste0("Pr", u(0x00C3,0x00B8), "ver"),
+      paste0("h", u(0x00C3,0x00B8), "yest"), paste0("H", u(0x00C3,0x00B8), "yest"), paste0("best", u(0x00C3,0x00A5), "tt"), paste0("Best", u(0x00C3,0x00A5), "tt"),
+      paste0("overv", u(0x00C3,0x00A5), "king"), paste0("Overv", u(0x00C3,0x00A5), "king"), paste0("Kj", u(0x00C3,0x00B8), "nn"), paste0("kj", u(0x00C3,0x00B8), "nn"),
+      paste0("n", u(0x00C3,0x00A5), "v", u(0x00C3,0x00A6), "rende"), paste0("N", u(0x00C3,0x00A5), "v", u(0x00C3,0x00A6), "rende"), paste0("S", u(0x00C3,0x00B8), "rlandet"), paste0(u(0x00C3,0x02DC), "stlandet"),
+      paste0(u(0x00C3,0x00B8), "verst"), paste0("niv", u(0x00C3,0x00A5))
+    )
   )
-
-  repair_one <- function(text) {
-    if (is.na(text) || !nzchar(text)) {
-      return(text)
-    }
-
-    repaired <- text
-    for (iter in seq_len(6)) {
-      previous <- repaired
-      for (i in seq_along(replace_map)) {
-        repaired <- gsub(names(replace_map)[i], unname(replace_map[i]), repaired, fixed = TRUE)
-      }
-      repaired <- trimws(repaired)
-      if (identical(repaired, previous)) {
-        break
-      }
-    }
-
-    repaired
-  }
-
-  needs_repair <- !na_idx & grepl("Ã|Â|â", out)
-  if (any(needs_repair)) {
-    out[needs_repair] <- vapply(out[needs_repair], repair_one, character(1))
+  for (i in seq_along(replacements)) {
+    out <- gsub(names(replacements)[i], unname(replacements[i]), out, fixed = TRUE, useBytes = TRUE)
   }
   out <- trimws(out)
   out[na_idx] <- NA_character_
@@ -695,7 +670,7 @@ save_plot_to_ppt <- function(
     slide_title <- plot$labels$title
   }
   if (is.null(slide_title) || !nzchar(slide_title)) {
-    slide_title <- "Figur"
+    slide_title <- normalize_norwegian_text("Figur")
   }
 
   # Ensure a single layout value is passed to officer::add_slide()
@@ -705,7 +680,7 @@ save_plot_to_ppt <- function(
 
   presentation <- officer::ph_with(
     presentation,
-    value = slide_title,
+    value = normalize_norwegian_text(slide_title),
     location = officer::ph_location_type(type = "title")
   )
 
@@ -730,8 +705,12 @@ save_table_to_ppt <- function(
   layout = "Title and Content",
   master = "Office Theme"
 ) {
-  table_flextable <- flextable::flextable(table) |>
-    flextable::autofit()
+  table_flextable <- if (inherits(table, 'flextable')) {
+    table
+  } else {
+    flextable::flextable(table) |> 
+      flextable::autofit()
+  }
 
   if (length(layout) != 1) layout <- layout[1]
   presentation <- officer::add_slide(presentation, layout = layout, master = master)
@@ -742,7 +721,7 @@ save_table_to_ppt <- function(
   )
   presentation <- officer::ph_with(
     presentation,
-    value = caption,
+    value = normalize_norwegian_text(caption),
     location = officer::ph_location_type(type = "title")
   )
 
@@ -761,8 +740,8 @@ add_section_slide <- function(
   if (!is.null(main_topics) && length(main_topics) > 0) {
     topic_text <- paste(paste0("\u2022 ", main_topics), collapse = "\n")
     section_plot <- ggplot() +
-      annotate("text", x = 0, y = 0.25, label = title, size = 11, fontface = "bold", family = "sans") +
-      annotate("text", x = 0, y = -0.05, label = ifelse(is.null(subtitle), "", subtitle), size = 5, family = "sans") +
+      annotate("text", x = 0, y = 0.25, label = normalize_norwegian_text(title), size = 11, fontface = "bold", family = "sans") +
+      annotate("text", x = 0, y = -0.05, label = normalize_norwegian_text(ifelse(is.null(subtitle), "", subtitle)), size = 5, family = "sans") +
       annotate("text", x = -0.75, y = -0.45, label = topic_text, hjust = 0, vjust = 1, size = 4.4, family = "sans") +
       xlim(-1, 1) +
       ylim(-1, 1) +
@@ -773,7 +752,7 @@ add_section_slide <- function(
       plot = section_plot,
       layout = layout,
       master = master,
-      title = title
+      title = normalize_norwegian_text(title)
     )
 
     return(presentation)
@@ -784,14 +763,14 @@ add_section_slide <- function(
   presentation <- officer::add_slide(presentation, layout = layout, master = master)
   presentation <- officer::ph_with(
     presentation,
-    value = title,
+    value = normalize_norwegian_text(title),
     location = officer::ph_location_type(type = "title")
   )
 
   if (!is.null(subtitle) && nzchar(subtitle)) {
     presentation <- officer::ph_with(
       presentation,
-      value = subtitle,
+      value = normalize_norwegian_text(subtitle),
       location = officer::ph_location_type(type = "body")
     )
   }
@@ -1804,14 +1783,16 @@ plot_run_quality_stacked <- function(
     dplyr::count(run_id, run_quality_status, name = "n") %>%
     dplyr::group_by(run_id) %>%
     dplyr::mutate(percent = 100 * n / sum(n)) %>%
-    dplyr::ungroup() %>%
-    dplyr::mutate(
-      label_txt = dplyr::case_when(
-        label_mode == "n" ~ paste0("n=", scales::comma(n)),
-        label_mode == "percent" ~ paste0("%=", round(percent, 1)),
-        TRUE ~ paste0("n=", scales::comma(n), "\n%=", round(percent, 1))
-      )
-    )
+    dplyr::ungroup()
+
+  d$label_txt <- if (label_mode == "n") {
+    paste0("n=", scales::comma(d$n))
+  } else if (label_mode == "percent") {
+    paste0("%=", round(d$percent, 1))
+  } else {
+    paste0("n=", scales::comma(d$n), "\n%=", round(d$percent, 1))
+  }
+
 
   if (is.null(status_colors)) {
     status_levels <- unique(as.character(d$run_quality_status))

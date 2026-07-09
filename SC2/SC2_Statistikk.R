@@ -1,20 +1,37 @@
 resolve_script_dir <- function() {
-  if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
-    ctx <- tryCatch(rstudioapi::getSourceEditorContext(), error = function(e) NULL)
-    if (!is.null(ctx) && nzchar(ctx$path)) {
-      return(dirname(normalizePath(ctx$path, winslash = "/", mustWork = FALSE)))
+  frame_paths <- character()
+  frame_list <- sys.frames()
+  if (length(frame_list) > 0) {
+    for (idx in rev(seq_along(frame_list))) {
+      ofile <- tryCatch(frame_list[[idx]]$ofile, error = function(e) "")
+      if (!is.null(ofile) && nzchar(ofile)) {
+        frame_paths <- c(
+          frame_paths,
+          normalizePath(ofile, winslash = "/", mustWork = FALSE)
+        )
+      }
     }
   }
+  frame_paths <- unique(frame_paths[nzchar(frame_paths)])
+  if (length(frame_paths) > 0) {
+    return(dirname(frame_paths[[1]]))
+  }
+
   args_all <- commandArgs(trailingOnly = FALSE)
   file_arg <- grep("^--file=", args_all, value = TRUE)
   if (length(file_arg) > 0) {
     script_path <- sub("^--file=", "", file_arg[1])
     return(dirname(normalizePath(script_path, winslash = "/", mustWork = FALSE)))
   }
-  this_file <- tryCatch(normalizePath(sys.frames()[[1]]$ofile, winslash = "/", mustWork = FALSE), error = function(e) "")
+
+  this_file <- tryCatch(
+    normalizePath(sys.frames()[[1]]$ofile, winslash = "/", mustWork = FALSE),
+    error = function(e) ""
+  )
   if (nzchar(this_file)) {
     return(dirname(this_file))
   }
+
   normalizePath(getwd(), winslash = "/", mustWork = TRUE)
 }
 
