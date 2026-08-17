@@ -1,3 +1,12 @@
+# =============================================================================
+# WORK IN PROGRESS — reviewed, behaviour-preserving copy
+#
+# Purpose: This file is a maintainability-focused review copy of RSV_Analysis.R.
+# Changes in the WIP series are limited to structure, documentation, and WIP
+# dependency isolation. The calculations, filters, object names, and exported
+# outputs are retained so results can be compared directly with production.
+# =============================================================================
+
 source("development/Source_files/pipeline_bootstrap.R")
 source("development/Source_files/report_export.R")
 
@@ -368,10 +377,23 @@ infer_gene_label <- function(col_name) {
 }
 
 if (!is.na(rsv_indel_date_col) && length(rsv_indel_cols) > 0) {
-  rsv_long <- rsvdb %>%
+  # Keep the complete eligible sample set for the denominator before removing
+  # samples without an indel call. Percentages therefore describe the share of
+  # all sequenced samples in each month and subtype.
+  rsv_indel_source <- rsvdb %>%
     filter(subtype_group %in% c('RSVA', 'RSVB')) %>%
     mutate(indel_month = floor_date(as.Date(.data[[rsv_indel_date_col]]), 'month')) %>%
-    filter(!is.na(indel_month)) %>%
+    filter(!is.na(indel_month))
+
+  if ('key' %in% names(rsv_indel_source)) {
+    rsv_indel_source <- rsv_indel_source %>%
+      mutate(indel_sample_id = dplyr::na_if(trimws(as.character(key)), ''))
+  } else {
+    rsv_indel_source <- rsv_indel_source %>%
+      mutate(indel_sample_id = as.character(dplyr::row_number()))
+  }
+
+  rsv_long <- rsv_indel_source %>%
     pivot_longer(cols = all_of(rsv_indel_cols), names_to = 'mutation_col', values_to = 'mutation_raw') %>%
     filter(!is.na(mutation_raw), trimws(as.character(mutation_raw)) != '') %>%
     separate_rows(mutation_raw, sep = ';|,') %>%
@@ -388,8 +410,11 @@ if (!is.na(rsv_indel_date_col) && length(rsv_indel_cols) > 0) {
     ) %>%
     filter(mutation_raw != '', !tolower(mutation_raw) %in% c('na', 'n/a', 'none', 'no mutations', 'ikke_satt'))
 
-  totals <- rsv_long %>% distinct(indel_month, subtype_group, .keep_all = TRUE) %>% count(indel_month, subtype_group, name = 'total')
+  totals <- rsv_indel_source %>%
+    distinct(indel_month, subtype_group, indel_sample_id) %>%
+    count(indel_month, subtype_group, name = 'total')
   mut_counts <- rsv_long %>%
+    distinct(indel_month, subtype_group, indel_sample_id, mutation_gene) %>%
     count(indel_month, subtype_group, mutation_gene, name = 'n') %>%
     left_join(totals, by = c('indel_month', 'subtype_group')) %>%
     mutate(percent = 100 * n / total)

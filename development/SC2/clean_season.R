@@ -1,4 +1,13 @@
 # =============================================================================
+# WORK IN PROGRESS — reviewed, behaviour-preserving copy
+#
+# Purpose: This file is a maintainability-focused review copy of SC2_DataCleaning_25-26.R.
+# Changes in the WIP series are limited to structure, documentation, and WIP
+# dependency isolation. The calculations, filters, object names, and exported
+# outputs are retained so results can be compared directly with production.
+# =============================================================================
+
+# =============================================================================
 # SC2 current-season data cleaning (season 2025/26)
 # Input:  SC2_25_26_raw_merged and SC2_20_25
 # Output: SC2_25_26_clean, SC2_25_26_prefilter, SC2_25_26,
