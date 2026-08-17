@@ -1,3 +1,12 @@
+# =============================================================================
+# WORK IN PROGRESS — reviewed, behaviour-preserving copy
+#
+# Purpose: This file is a maintainability-focused review copy of INF_SQLquery_25-26.R.
+# Changes in the WIP series are limited to structure, documentation, and WIP
+# dependency isolation. The calculations, filters, object names, and exported
+# outputs are retained so results can be compared directly with production.
+# =============================================================================
+
 # INF 25-26 SQL query
 # Self-contained script intended for sourcing by analysis/orchestration scripts.
 # Responsibility: load raw SQL tables, apply duplicate-column harmonization, and output raw merged dataframe only.

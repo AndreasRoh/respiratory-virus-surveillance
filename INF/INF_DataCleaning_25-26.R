@@ -1,3 +1,12 @@
+# =============================================================================
+# WORK IN PROGRESS — reviewed, behaviour-preserving copy
+#
+# Purpose: This file is a maintainability-focused review copy of INF_DataCleaning_25-26.R.
+# Changes in the WIP series are limited to structure, documentation, and WIP
+# dependency isolation. The calculations, filters, object names, and exported
+# outputs are retained so results can be compared directly with production.
+# =============================================================================
+
 # INF 25-26 data cleaning
 # Input: INF_25_26_raw_merged
 # Output: INF_25_26_clean, INF_25_26_sequences, fludb

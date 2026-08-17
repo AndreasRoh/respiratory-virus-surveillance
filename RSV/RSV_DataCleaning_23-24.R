@@ -1,3 +1,12 @@
+# =============================================================================
+# WORK IN PROGRESS — reviewed, behaviour-preserving copy
+#
+# Purpose: This file is a maintainability-focused review copy of RSV_DataCleaning_23-24.R.
+# Changes in the WIP series are limited to structure, documentation, and WIP
+# dependency isolation. The calculations, filters, object names, and exported
+# outputs are retained so results can be compared directly with production.
+# =============================================================================
+
 # RSV data cleaning
 # Input: RSV_23_24_raw_merged
 # Output: rsvdb (cleaned pathogen DB object)

@@ -1,3 +1,12 @@
+# =============================================================================
+# WORK IN PROGRESS — reviewed, behaviour-preserving copy
+#
+# Purpose: This file is a maintainability-focused review copy of SC2_Analysis_combined_singlefile.R.
+# Changes in the WIP series are limited to structure, documentation, and WIP
+# dependency isolation. The calculations, filters, object names, and exported
+# outputs are retained so results can be compared directly with production.
+# =============================================================================
+
 # Combined single-file SC2 analysis generated from SC2_Analysis.R and inlined SC2 module scripts.
 # Keeps external sources: common_report_utils.R, SC2 SQL query scripts, and SC2_Classification.R.
 
@@ -147,28 +156,6 @@ collapse_minor_categories <- function(data, category_col, value_col, other_label
       )
     )
 }
-resolve_layout_placeholder <- function(presentation, layout, master, placeholder_type) {
-  layout_df <- officer::layout_properties(presentation, layout = layout, master = master)
-  match_row <- layout_df %>%
-    filter(type == placeholder_type) %>%
-    slice(1)
-
-  if (nrow(match_row) == 0) {
-    return(NULL)
-  }
-
-  match_row
-}
-
-placeholder_to_location <- function(placeholder_row, pad_left = 0, pad_top = 0, pad_right = 0, pad_bottom = 0) {
-  officer::ph_location(
-    left = placeholder_row$offx + pad_left,
-    top = placeholder_row$offy + pad_top,
-    width = max(0.2, placeholder_row$cx - pad_left - pad_right),
-    height = max(0.2, placeholder_row$cy - pad_top - pad_bottom)
-  )
-}
-
 # Unified PowerPoint export helper for both ggplot objects and tables.
 export_to_ppt <- function(presentation, content, slide_title, slide_subtitle = NULL, layout = "Title and Content", master = "Office Theme", preserve_plot_labels = FALSE) {
   sanitize_xml_text <- function(x) {
@@ -1218,7 +1205,6 @@ export_graph <- add_section_slide(
   "Sekvenseringssted",
   "Hvor SC2-prøver ble sekvensert"
 )
-# ---- BEGIN INLINED: SC2/SC2_Seqs_per_month.R ----
 ###### Sekvenser per uke for prosentberegning: ######
 
 if (!exists("SC2db")) {
@@ -1316,7 +1302,6 @@ export_graph <- export_to_ppt(
   build_slide_subtitle(v_seqs_per_month_origin12m, "my", sum(v_seqs_per_month_origin12m$TotalSeq, na.rm = TRUE), "Siste 12 måneder")
 )
 
-# ---- END INLINED: SC2/SC2_Seqs_per_month.R ----
 
 
 # ============================================================================
@@ -1333,7 +1318,6 @@ export_graph <- add_section_slide(
   "Klassifiseringer per m\u00e5ned",
   c("Pangolin per m\u00e5ned", "Tessy siste 12 mnd", "Tessy siste 6 mnd")
 )
-# ---- BEGIN INLINED: SC2/SC2_Pangolin_p_m.R ----
 sequencing_window_start <- if (exists("data_window_start")) as.Date(data_window_start) else (Sys.Date() %m-% months(6))
 
 # Prepare data for the weekly sequence count
@@ -1541,13 +1525,13 @@ for (collapsed_pango in unique_collapsed_pangosrec) {
       )
     ) %>%
     group_by(Sampledate, nc_pangolin_short_plot) %>%
-    summarise(count = sum(count), Percent = sum(Percent), .groups = "drop")
+    summarise(count = sum(count), Percent = sum(Percent), Percent_display = 100 * sum(Percent), .groups = "drop")
 
   collapsed_pangosrecgr_percent <- make_monthly_heatmap(
     data = subset_data_plot,
     date_col = "Sampledate",
     category_col = "nc_pangolin_short_plot",
-    value_col = "Percent",
+    value_col = "Percent_display",
     fill_label = "Andel (%)",
     x_breaks = "1 month",
     bottom_categories = c("Andre undervarianter"),
@@ -1568,7 +1552,7 @@ for (collapsed_pango in unique_collapsed_pangosrec) {
 }
 
 p6modata <- subset_data6mopango %>%
-  mutate(n = paste0(count, " (", round(Percent, 2), "%", ")"))
+  mutate(n = paste0(count, " (", round(100 * Percent, 2), "%", ")"))
 
 pangolin_table_full <- p6modata %>%
   pivot_wider(
@@ -1605,9 +1589,7 @@ pangolin_count_table_full <- subset_data6mopango %>%
   rename("SARS-CoV2 Variants" = nc_pangolin_short) %>%
   arrange(desc(.[[ncol(.)]]))
 
-# ---- END INLINED: SC2/SC2_Pangolin_p_m.R ----
 
-# ---- BEGIN INLINED: SC2/SC2_Tessy_p_m.R ----
 # Output in this section:
 #   - Whole-period Tessy overview
 #   - Per-Tessy collapsed-pango stacked chart + andel heatmap
@@ -1901,7 +1883,6 @@ export_graph <- export_to_ppt(
   build_slide_subtitle(subset_data_season_p, "Sampledate", nrow(tessy6mo), "Andeler måned for måned | Stablede andeler øverst | Volum og trender nederst")
 )
 
-# ---- END INLINED: SC2/SC2_Tessy_p_m.R ----
 
 
 # ============================================================================
@@ -1909,7 +1890,6 @@ export_graph <- export_to_ppt(
 # ============================================================================
 
 export_graph <- add_section_slide(export_graph, "Mutasjoner", "Mutasjonskombinasjoner, frekvenser og proteindomener", c("Spike-mutasjoner", "Kombinasjoner", "Domenelollipop"))
-# ---- BEGIN INLINED: SC2/SC2_spike_mut_of_interest.R ----
 # Extract relevant mutation data and perform initial filtering and transformations
 mutfr <- SC2db %>%
   select(prove_tatt, spike_mut, nc_pangolin_short, Collapsed_pango, Tessy) %>%
@@ -2089,14 +2069,12 @@ for (combination in unique_combinations) {
   }
 }
 
-# ---- END INLINED: SC2/SC2_spike_mut_of_interest.R ----
 
 
 # ============================================================================ 
 # MUTATION ANALYSIS - PANGOLIN FOCUS
 # ============================================================================
 
-# ---- BEGIN INLINED: SC2/SC2_spike_mut_freq.R ----
 # --- Filter and Prepare Linmut Data for Mutation Analysis ---
 
 Linmut <- SC2db %>%
@@ -2401,7 +2379,6 @@ if (nrow(domainmutcp) == 0) {
 }
 
 
-# ---- END INLINED: SC2/SC2_spike_mut_freq.R ----
 
 
 # ============================================================================
@@ -2601,128 +2578,6 @@ for (table_info in table_data) {
   export_graph <- export_to_ppt(export_graph, table_info$data, table_info$caption)
 }
 
-# ============================================================================
-# AGE DISTRIBUTION BY TESSY (3M/6M)
-# ============================================================================
-
-age_source_df <- if (exists("SC2db")) SC2db else SC2db
-
-age_date_col <- intersect(c("prove_tatt", "PROVE_TATT", "sample_date", "Sampledate"), names(age_source_df))[1]
-age_tessy_col <- intersect(c("Tessy", "tessy"), names(age_source_df))[1]
-age_col <- intersect(c("pasient_alder"), names(age_source_df))[1]
-
-build_age_tessy_plot <- function(month_window, sentinel_only = FALSE) {
-  if (is.na(age_date_col) || is.na(age_tessy_col)) {
-    return(NULL)
-  }
-  if (is.na(age_col)) {
-    return(NULL)
-  }
-
-  plot_df <- age_source_df %>%
-    mutate(
-      plot_date = as.Date(.data[[age_date_col]]),
-      Tessy_plot = as.character(.data[[age_tessy_col]])
-    ) %>%
-    filter(
-      !is.na(plot_date),
-      plot_date >= (Sys.Date() %m-% months(month_window)),
-      !is.na(Tessy_plot),
-      trimws(Tessy_plot) != ""
-    )
-
-  if (sentinel_only) {
-    if (!("prove_kategori_group" %in% names(plot_df))) {
-      return(NULL)
-    }
-    plot_df <- plot_df %>% filter(prove_kategori_group == "Sentinel")
-  }
-
-  plot_df <- plot_df %>%
-    mutate(
-      pasient_alder_num = suppressWarnings(as.numeric(trimws(as.character(.data[[age_col]])))),
-      age_group_raw = as.character(pasient_alder_num),
-      pasient_aldersgruppe = as.character(age_to_group_standard(pasient_alder_num)),
-      age_group_plot = case_when(
-        pasient_aldersgruppe %in% c("0-4", "5-14", "15-24", "25-59", "60+") ~ pasient_aldersgruppe,
-        TRUE ~ NA_character_
-      )
-    )
-
-  age_levels <- c("0-4", "5-14", "15-24", "25-59", "60+")
-
-  plot_df <- plot_df %>%
-    mutate(age_group_plot = factor(age_group_plot, levels = age_levels)) %>%
-    filter(!is.na(age_group_plot))
-
-  if (nrow(plot_df) == 0) {
-    return(NULL)
-  }
-
-  age_tessy_df <- plot_df %>%
-    count(Tessy_plot, age_group_plot, name = "n") %>%
-    group_by(Tessy_plot) %>%
-    mutate(
-      tessy_n = sum(n),
-      percent = (n / tessy_n) * 100
-    ) %>%
-    ungroup()
-
-  tessy_levels <- age_tessy_df %>%
-    distinct(Tessy_plot, tessy_n) %>%
-    arrange(desc(tessy_n), Tessy_plot) %>%
-    pull(Tessy_plot)
-
-  tessy_labels <- age_tessy_df %>%
-    distinct(Tessy_plot, tessy_n) %>%
-    mutate(label = paste0(Tessy_plot, "\n(n=", tessy_n, ")")) %>%
-    {
-      setNames(.$label, .$Tessy_plot)
-    }
-
-  age_tessy_df <- age_tessy_df %>%
-    mutate(Tessy_plot = factor(Tessy_plot, levels = tessy_levels))
-
-  # Diagnostics for last 6 months: raw labels and normalized labels
-  if (month_window == 6 && !sentinel_only) {
-    current_week_age <- week(Sys.Date())
-    current_year_age <- year(Sys.Date())
-    results_dir_age <- results_stats_dir
-
-    raw_age_counts <- plot_df %>%
-      count(Tessy_plot, age_group_raw, name = "n_raw") %>%
-      arrange(desc(n_raw))
-
-    norm_age_counts <- plot_df %>%
-      count(Tessy_plot, age_group_plot, name = "n_norm") %>%
-      arrange(Tessy_plot, age_group_plot)
-  }
-
-  ggplot(age_tessy_df, aes(x = Tessy_plot, y = percent, fill = age_group_plot)) +
-    geom_col(position = "stack") +
-    scale_x_discrete(labels = tessy_labels) +
-    scale_y_continuous(labels = scales::percent_format(scale = 1)) +
-    coord_cartesian(ylim = c(0, 100)) +
-    scale_fill_manual(values = kvalitativ_a) +
-    labs(
-      title = paste0(
-        "Aldersgruppefordeling per ECDC-variantklassifisering",
-        ifelse(sentinel_only, " (Sentinel only)", ""),
-        " (last ", month_window, " months)"
-      ),
-      x = "ECDC Variant Classification",
-      y = "Andel (%)",
-      fill = "Age group"
-    ) +
-    theme_minimal(base_size = 12) +
-    theme(
-      axis.text.x = element_text(angle = 0, hjust = 0.5),
-      panel.grid.major.x = element_blank()
-    )
-}
-
-## The age-by-Tessy plot builder above is kept for ad hoc diagnostics,
-## but these exploratory slides are not part of the standard weekly report.
 
 # ============================================================================
 # PATIENT AND TESSY DISTRIBUTIONS
