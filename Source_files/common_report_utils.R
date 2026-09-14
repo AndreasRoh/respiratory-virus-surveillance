@@ -78,6 +78,15 @@ parse_month_key_nb <- function(x) {
   out
 }
 
+parse_surveillance_date <- function(x) {
+  x_chr <- trimws(as.character(x))
+  x_chr[x_chr == ""] <- NA_character_
+  parsed <- suppressWarnings(lubridate::parse_date_time(
+    x_chr, orders = c("Y-m-d", "d.m.Y", "d/m/Y", "Y/m/d")
+  ))
+  as.Date(parsed)
+}
+
 season_start_year_from_date <- function(x) {
   d <- as.Date(x)
   y <- lubridate::year(d)
@@ -133,22 +142,39 @@ heatmap_axis_text_size <- function(
   max(min_size, base_size - reduction)
 }
 
+iso_week_start <- function(iso_year, iso_week) {
+  iso_year <- as.integer(iso_year)
+  iso_week <- as.integer(iso_week)
+  jan_fourth <- as.Date(sprintf("%04d-01-04", iso_year))
+  week_one_start <- jan_fourth - (lubridate::wday(jan_fourth, week_start = 1) - 1L)
+  week_one_start + lubridate::weeks(iso_week - 1L)
+}
+
 season_window_bounds <- function(start_year) {
   sy <- as.integer(start_year)
+  start <- iso_week_start(sy, 35L)
+  end <- iso_week_start(sy + 1L, 35L) - lubridate::days(1L)
+  list(start = as.Date(start), end = as.Date(end))
+}
+
+season_info_from_start_year <- function(start_year) {
+  sy <- as.integer(start_year)
+  if (length(sy) != 1L || is.na(sy) || sy < 2000L) {
+    stop("`start_year` must be a single four-digit season start year.")
+  }
+
   list(
-    start = as.Date(sprintf("%04d-08-29", sy)),
-    end = as.Date(sprintf("%04d-08-28", sy + 1L))
+    current_start_year = sy,
+    current_label = season_label_from_start_year(sy),
+    current_bounds = season_window_bounds(sy),
+    previous_start_year = sy - 1L,
+    previous_label = season_label_from_start_year(sy - 1L),
+    previous_bounds = season_window_bounds(sy - 1L)
   )
 }
 
 current_and_previous_seasons <- function(today = Sys.Date()) {
-  cur_start_year <- as.integer(season_start_year_from_date(today))
-  list(
-    current_start_year = cur_start_year,
-    current_label = season_label_from_start_year(cur_start_year),
-    previous_start_year = cur_start_year - 1L,
-    previous_label = season_label_from_start_year(cur_start_year - 1L)
-  )
+  season_info_from_start_year(season_start_year_from_date(today))
 }
 
 # Run-quality window:
@@ -176,7 +202,24 @@ normalize_norwegian_text <- function(x) {
   if (!is.character(x)) return(x)
 
   u <- function(...) intToUtf8(c(...))
-  out <- enc2utf8(x)
+  out <- x
+  unknown_or_bytes <- !is.na(out) & Encoding(out) %in% c("unknown", "bytes")
+  if (any(unknown_or_bytes)) {
+    idx <- which(unknown_or_bytes)
+    as_utf8 <- iconv(out[idx], from = "UTF-8", to = "UTF-8", sub = NA)
+    valid_utf8 <- !is.na(as_utf8)
+    if (any(valid_utf8)) {
+      out[idx[valid_utf8]] <- as_utf8[valid_utf8]
+    }
+    if (any(!valid_utf8)) {
+      out[idx[!valid_utf8]] <- iconv(out[idx[!valid_utf8]], from = "latin1", to = "UTF-8", sub = NA)
+    }
+  }
+  latin1_encoded <- !is.na(out) & Encoding(out) == "latin1"
+  if (any(latin1_encoded)) {
+    out[latin1_encoded] <- iconv(out[latin1_encoded], from = "latin1", to = "UTF-8", sub = NA)
+  }
+
   na_idx <- is.na(out)
   replacements <- setNames(
     c(
@@ -201,7 +244,7 @@ normalize_norwegian_text <- function(x) {
     )
   )
   for (i in seq_along(replacements)) {
-    out <- gsub(names(replacements)[i], unname(replacements[i]), out, fixed = TRUE, useBytes = TRUE)
+    out <- gsub(names(replacements)[i], unname(replacements[i]), out, fixed = TRUE)
   }
   out <- trimws(out)
   out[na_idx] <- NA_character_
@@ -217,6 +260,7 @@ normalize_object_text <- function(x) {
 
   if (is.character(x)) {
     return(normalize_norwegian_text(x))
+
   }
 
   if (is.data.frame(x)) {
@@ -234,6 +278,22 @@ normalize_object_text <- function(x) {
 
   x
 }
+normalize_plot_text <- function(plot) {
+  if (inherits(plot, "ggplot")) {
+    for (i in seq_along(plot$labels)) {
+      label_value <- plot$labels[[i]]
+      if (is.factor(label_value)) label_value <- as.character(label_value)
+      if (is.character(label_value)) plot$labels[[i]] <- normalize_norwegian_text(label_value)
+    }
+  }
+
+  if (inherits(plot, "patchwork") && !is.null(plot$patches$plots)) {
+    plot$patches$plots <- lapply(plot$patches$plots, normalize_plot_text)
+  }
+
+  plot
+}
+
 normalize_geography_key <- function(x) {
   x_norm <- normalize_norwegian_text(x)
   x_norm <- trimws(x_norm)
@@ -652,6 +712,44 @@ palette_all <- c(
   R1_20 = "#2C0807"
 )
 
+fhi_colours <- c(
+  paper = "#FFFFFF",
+  ink = unname(palette_all[["B2_20"]]),
+  text_muted = unname(palette_all[["B1_40"]]),
+  blue_light = unname(palette_all[["B2_98"]]),
+  blue_grid = unname(palette_all[["B2_95"]]),
+  blue_border = unname(palette_all[["B2_90"]]),
+  blue_mid = unname(palette_all[["B2_50"]]),
+  blue_soft = unname(palette_all[["B2_80"]]),
+  neutral_fill = unname(palette_all[["B2_95"]]),
+  status_pass = unname(palette_all[["GR1_60"]]),
+  status_fail = unname(palette_all[["R1_60"]]),
+  unknown = unname(palette_all[["B1_50"]])
+)
+
+fhi_colour <- function(name) {
+  name <- as.character(name)
+  if (length(name) != 1L || is.na(name) || !name %in% names(fhi_colours)) {
+    stop("Unknown FHI colour role: ", paste(name, collapse = ", "))
+  }
+  unname(fhi_colours[[name]])
+}
+
+report_audit_mode <- function() {
+  tolower(Sys.getenv("REPORT_AUDIT_MODE", unset = "false")) %in% c("1", "true", "yes")
+}
+
+report_output_dir <- function(default_dir, scope = NULL) {
+  if (!report_audit_mode()) {
+    return(default_dir)
+  }
+
+  audit_root <- Sys.getenv("REPORT_AUDIT_OUTPUT_DIR", unset = tempdir())
+  output_dir <- if (is.null(scope) || !nzchar(scope)) audit_root else file.path(audit_root, scope)
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  normalizePath(output_dir, winslash = "/", mustWork = TRUE)
+}
+
 ## -------------------------
 ## 3) Plotting and export helpers
 ## -------------------------
@@ -663,6 +761,7 @@ save_plot_to_ppt <- function(
   master = "Office Theme",
   title = NULL
 ) {
+  plot <- normalize_plot_text(plot)
   plot_rvg <- rvg::dml(ggobj = plot)
   slide_title <- title
 
@@ -802,8 +901,6 @@ build_metadata_counts <- function(df, x_var, fill_var) {
     dplyr::filter(!is.na(xv), trimws(xv) != "", !is.na(fv), trimws(fv) != "")
   if (nrow(d) == 0) return(NULL)
 
-  d$landsdel_label <- normalize_norwegian_text(d$landsdel_label)
-  landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "Sørlandet", "Østlandet", "Ukjent")
   d
 }
 
@@ -1027,10 +1124,7 @@ build_subclade_landsdel_month_heatmap <- function(
 
   if (nrow(d) == 0) return(NULL)
 
-  landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "Sørlandet", "Østlandet", "Ukjent")
   d$landsdel_label <- normalize_norwegian_text(d$landsdel_label)
-  d$landsdel_label <- normalize_norwegian_text(d$landsdel_label)
-  landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "Sørlandet", "Østlandet", "Ukjent")
   landsdel_levels <- c("Nord-Norge", "Midt-Norge", "Vestlandet", "Sørlandet", "Østlandet", "Ukjent")
   present_landsdel <- unique(d$landsdel_label)
   ordered_landsdel <- c(intersect(landsdel_levels, present_landsdel), setdiff(sort(present_landsdel), landsdel_levels))
@@ -1041,7 +1135,7 @@ build_subclade_landsdel_month_heatmap <- function(
     d,
     ggplot2::aes(x = landsdel_label, y = month_date, fill = percent)
   ) +
-    ggplot2::geom_tile(color = "white", linewidth = 0.2) +
+    ggplot2::geom_tile(color = fhi_colour("paper"), linewidth = 0.2) +
     ggplot2::facet_wrap(~subclade_plot, ncol = facet_ncol) +
     ggplot2::scale_y_date(labels = format_month_label, date_breaks = "1 month", expand = c(0, 0)) +
     ggplot2::scale_fill_gradientn(
@@ -1334,7 +1428,7 @@ build_fylke_map_plot_shared <- function(
   ggplot2::ggplot(norway_sf) +
     ggplot2::geom_sf(
       ggplot2::aes(fill = n_map),
-      color = "white",
+      color = fhi_colour("paper"),
       linewidth = 0.2
     ) +
     ggplot2::geom_text(
@@ -1346,7 +1440,7 @@ build_fylke_map_plot_shared <- function(
     ggplot2::scale_fill_gradient(
       low = fill_palette[2],
       high = fill_palette[min(length(fill_palette), 8)],
-      na.value = "grey95",
+      na.value = fhi_colour("blue_light"),
       limits = fill_limits
     ) +
     ggplot2::labs(title = title, fill = "Antall (n)") +
@@ -1439,7 +1533,7 @@ build_landsdel_map_plot_shared <- function(
   ggplot2::ggplot(norway_sf) +
     ggplot2::geom_sf(
       ggplot2::aes(fill = landsdel_name),
-      color = "white",
+      color = fhi_colour("paper"),
       linewidth = 0.2
     ) +
     ggplot2::geom_text(
@@ -1454,7 +1548,7 @@ build_landsdel_map_plot_shared <- function(
         "Østlandet" = kvalitativ_b[2],
         "Midt-Norge" = kvantitativ_gu1[5],
         "Nord-Norge" = kvantitativ_r1[5],
-        "Ukjent" = "grey85"
+        "Ukjent" = fhi_colour("blue_grid")
       )
     ) +
     ggplot2::labs(title = title, fill = "Landsdel") +
@@ -1797,9 +1891,9 @@ plot_run_quality_stacked <- function(
   if (is.null(status_colors)) {
     status_levels <- unique(as.character(d$run_quality_status))
     if (all(c("Passed", "Not passed") %in% status_levels)) {
-      status_colors <- c("Passed" = "#179463", "Not passed" = "#d74b46")
+      status_colors <- c("Passed" = fhi_colour("status_pass"), "Not passed" = fhi_colour("status_fail"))
     } else if (all(c("Submitted", "Not submitted") %in% status_levels)) {
-      status_colors <- c("Submitted" = "#179463", "Not submitted" = "#d74b46")
+      status_colors <- c("Submitted" = fhi_colour("status_pass"), "Not submitted" = fhi_colour("status_fail"))
     } else {
       status_colors <- stats::setNames(
         fhi_discrete_palette(length(status_levels), kvalitativ_comb),
@@ -1841,7 +1935,7 @@ plot_run_quality_coverage_box <- function(run_quality_df, title_txt = "Coverage 
     dplyr::mutate(Tessy_plot = ifelse(Tessy_plot %in% top_colors, Tessy_plot, "Andre"))
 
   ggplot2::ggplot(d, ggplot2::aes(x = run_id, y = run_quality_coverage_norm)) +
-    ggplot2::geom_boxplot(fill = "grey90", color = "grey30", outlier.shape = NA) +
+    ggplot2::geom_boxplot(fill = fhi_colour("blue_grid"), color = fhi_colour("text_muted"), outlier.shape = NA) +
     ggplot2::geom_jitter(ggplot2::aes(color = Tessy_plot), width = 0.2, height = 0, alpha = 0.7, size = 1.6) +
     ggplot2::scale_color_manual(values = fhi_discrete_palette(dplyr::n_distinct(d$Tessy_plot), kvalitativ_comb)) +
     ggplot2::labs(
@@ -1905,7 +1999,7 @@ flu_subtype_palette <- function() {
     "H1N1" = kvantitativ_gr1[6],
     "H3N2" = kvantitativ_b2[6],
     "BVIC" = kvantitativ_r1[6],
-    "Ukjent" = "grey50"
+    "Ukjent" = fhi_colour("unknown")
   )
 }
 
@@ -1944,7 +2038,7 @@ plot_run_quality_coverage_box_grouped <- function(
   d$color_group <- factor(d$color_group, levels = names(color_values))
 
   ggplot2::ggplot(d, ggplot2::aes(x = run_id, y = run_quality_coverage_norm)) +
-    ggplot2::geom_boxplot(fill = "grey90", color = "grey30", outlier.shape = NA) +
+    ggplot2::geom_boxplot(fill = fhi_colour("blue_grid"), color = fhi_colour("text_muted"), outlier.shape = NA) +
     ggplot2::geom_jitter(
       ggplot2::aes(color = color_group),
       width = 0.2,

@@ -1,11 +1,3 @@
-# =============================================================================
-# WORK IN PROGRESS — reviewed, behaviour-preserving copy
-#
-# Purpose: This file is a maintainability-focused review copy of SC2_Classification.R.
-# Changes in the WIP series are limited to structure, documentation, and WIP
-# dependency isolation. The calculations, filters, object names, and exported
-# outputs are retained so results can be compared directly with production.
-# =============================================================================
 
 
 ######################   Collapsing Pangolins  ##################################
@@ -113,7 +105,7 @@ base_palette <- if (exists("palette_all", inherits = TRUE)) {
 } else if (exists("kvalitativ_comb", inherits = TRUE)) {
   kvalitativ_comb
 } else {
-  c("#ec7c73", "#40436d", "#61d2b2", "#a93c38", "#f9dc8c", "#7176c9")
+  fhi_discrete_palette(6L, kvalitativ_comb)
 }
 
 variant_color <- stats::setNames(
@@ -124,7 +116,6 @@ variant_color <- stats::setNames(
 # Backward compatibility for existing references in downstream scripts.
 custom_colors <- variant_color
 
-#"#c8e1ec" "#179463" 
 
 
 # Classification by Origin of Sequences
@@ -152,7 +143,7 @@ origin_base_palette <- if (exists("palette_all", inherits = TRUE)) {
 } else if (exists("kvalitativ_comb", inherits = TRUE)) {
   kvalitativ_comb
 } else {
-  c("#ec7c73", "#40436d", "#61d2b2", "#a93c38", "#f9dc8c", "#7176c9")
+  fhi_discrete_palette(6L, kvalitativ_comb)
 }
 
 origin_color <- stats::setNames(
@@ -166,39 +157,49 @@ origin_color <- stats::setNames(
 
 ############################# TEssy variant mapping
 # Load the first CSV file
-variant_mappings_url_1 <- "https://www.ecdc.europa.eu/sites/default/files/documents/PathogenVariant_public_mappings.csv"
-variant_mappings_1 <- read.csv(variant_mappings_url_1)
+mapping_cache_dir <- Sys.getenv(
+  "SC2_TESSY_MAPPING_CACHE_DIR",
+  unset = file.path(Sys.getenv("LOCALAPPDATA", unset = tempdir()), "respiratory-virus-surveillance", "ecdc")
+)
+mapping_urls <- c(
+  "https://www.ecdc.europa.eu/sites/default/files/documents/PathogenVariant_public_mappings.csv",
+  "https://www.ecdc.europa.eu/sites/default/files/documents/PathogenVariant_public_mappings_VUM.csv"
+)
 
-# Load the second CSV file
-variant_mappings_url_2 <- "https://www.ecdc.europa.eu/sites/default/files/documents/PathogenVariant_public_mappings_VUM.csv"
-variant_mappings_2 <- read.csv(variant_mappings_url_2)
-
-# Combine the two data frames
-combined_variant_mappings <- rbind(variant_mappings_1, variant_mappings_2)
-
-# Split the included.sub.lineages into separate variants
-combined_variant_mappings$included.sub.lineages <- strsplit(combined_variant_mappings$included.sub.lineages, "\\|")
-
-# Ensure that included.sub.lineages are character vectors
-combined_variant_mappings$included.sub.lineages <- lapply(combined_variant_mappings$included.sub.lineages, as.character)
-
-# Modify the find_matched_variant function to return a single value (if any) rather than a vector
-find_matched_variant <- function(nc_pangolin_short) {
-  matched_variants <- combined_variant_mappings$VirusVariant[sapply(combined_variant_mappings$included.sub.lineages, function(variants) nc_pangolin_short %in% variants)]
-  if (length(matched_variants) > 0) {
-    return(matched_variants[1])  # Return the first matched variant
-  } else {
-    return(NA)
+mapping_tables <- lapply(mapping_urls, function(url) {
+  cache_path <- file.path(mapping_cache_dir, basename(url))
+  downloaded <- tryCatch(utils::read.csv(url, stringsAsFactors = FALSE), error = function(e) NULL)
+  if (!is.null(downloaded)) {
+    dir.create(mapping_cache_dir, recursive = TRUE, showWarnings = FALSE)
+    try(utils::write.csv(downloaded, cache_path, row.names = FALSE), silent = TRUE)
+    return(downloaded)
   }
+  if (file.exists(cache_path)) {
+    cached <- tryCatch(utils::read.csv(cache_path, stringsAsFactors = FALSE), error = function(e) NULL)
+    if (!is.null(cached)) return(cached)
+  }
+  warning("Unable to retrieve or read cached ECDC variant mapping: ", url)
+  NULL
+})
+
+if (any(vapply(mapping_tables, is.null, logical(1)))) {
+  is_audit_run <- exists("report_audit_mode", mode = "function") && report_audit_mode()
+  if (!is_audit_run) {
+    stop("ECDC variant mappings are unavailable. Retry later or provide cached CSV files in ", mapping_cache_dir)
+  }
+  warning("ECDC mappings are unavailable; audit mode is using Pangolin lineages as TESSy labels.")
+  tessy_raw <- trimws(as.character(SC2db$nc_pangolin_short))
+  SC2db$Tessy <- ifelse(is.na(tessy_raw) | tessy_raw == "", "Andre SARS CoV 2", tessy_raw)
+} else {
+  combined_variant_mappings <- do.call(rbind, Filter(Negate(is.null), mapping_tables))
+  combined_variant_mappings$included.sub.lineages <- strsplit(combined_variant_mappings$included.sub.lineages, "\\|")
+  combined_variant_mappings$included.sub.lineages <- lapply(combined_variant_mappings$included.sub.lineages, as.character)
+  SC2db$Tessy <- vapply(SC2db$nc_pangolin_short, function(lineage) {
+    matched <- combined_variant_mappings$VirusVariant[vapply(combined_variant_mappings$included.sub.lineages, function(values) lineage %in% values, logical(1))]
+    if (length(matched) > 0) matched[[1]] else NA_character_
+  }, character(1))
+  SC2db$Tessy <- ifelse(is.na(SC2db$Tessy), "Andre SARS CoV 2", SC2db$Tessy)
 }
-
-# Match included.sub.lineages and create a new column "Tessy" in the dataframe
-SC2db$Tessy <- sapply(SC2db$nc_pangolin_short, find_matched_variant)
-
-
-# Fill empty fields in "Tessy" column with "Andre Sars-CoV2"
-SC2db$Tessy <- ifelse(is.na(SC2db$Tessy), "Andre SARS CoV 2", SC2db$Tessy) 
-
 # Mutation based VOI/VUM/VOC classification (not in use currently)
 
 
@@ -294,31 +295,20 @@ VOI <- complete_combined_voi %>%
   arrange(month_ord, VOI) %>%
   select(-month_ord)
 
-# Output the results
-print(VUM)
-print(VOI)
-
-#####################
-# Define the period for the last six months
+# Build the complete Pangolin lineage table for the most recent six months.
 last_six_months <- seq(
   from = floor_date(Sys.Date() %m-% months(6), unit = "month"),
   to = floor_date(Sys.Date(), unit = "month"),
   by = "month"
-)
+) |>
+  format("%Y %b") |>
+  tolower()
 
-# Format these months consistently as lowercase and with leading zero in month (e.g., "2020 feb")
-last_six_months <- format(last_six_months, "%Y %b")
-last_six_months <- tolower(last_six_months)
-
-# Extract unique values for nc_pangolin_short in the last six months
 unique_variants <- SC2db %>%
   filter(my > yearmonth(Sys.Date() %m-% months(6))) %>%
-  select(nc_pangolin_short) %>%
+  filter(!is.na(nc_pangolin_short), nc_pangolin_short != "") %>%
   distinct() %>%
-  na.omit()
-
-# Generate all combinations of months and variants
-unique_variants <- unique_variants$nc_pangolin_short  # Convert to vector
+  pull(nc_pangolin_short)
 
 complete_combined <- expand.grid(
   my = last_six_months, 
@@ -338,19 +328,7 @@ processed_data <- SC2db %>%
 Stat <- complete_combined %>%
   left_join(processed_data, by = c("my", "nc_pangolin_short")) %>%
   replace_na(list(Antall = 0, flagg = 0)) %>%
-  filter(nc_pangolin_short != "" & !is.na(nc_pangolin_short))
-
-# Correctly arrange by my as a date, then format back
-Stat <- Stat %>%
+  filter(nc_pangolin_short != "" & !is.na(nc_pangolin_short)) %>%
   mutate(month_ord = as.Date(paste0(my, " 01"), format = "%Y %b %d")) %>%
   arrange(month_ord, nc_pangolin_short) %>%
-  select(-month_ord)  # Remove the ordering column
-
-# Output the complete arranged data
-print(Stat)
-
-##############################
-
-
-
-
+  select(-month_ord)

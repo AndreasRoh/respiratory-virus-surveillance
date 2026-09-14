@@ -1,30 +1,14 @@
-# =============================================================================
-# WORK IN PROGRESS — reviewed, behaviour-preserving copy
-#
-# Purpose: This file is a maintainability-focused review copy of INF_Analysis.R.
-# Changes in the WIP series are limited to structure, documentation, and WIP
-# dependency isolation. The calculations, filters, object names, and exported
-# outputs are retained so results can be compared directly with production.
-# =============================================================================
 
-source("development/Source_files/pipeline_bootstrap.R")
-source("development/Source_files/report_export.R")
+source("Source_files/pipeline_bootstrap.R")
+source("Source_files/report_export.R")
 
 bundle_scripts_dir <- resolve_script_dir()
 
 analysis_started_at <- Sys.time()
-timed_step <- function(step_name, expr) {
-  step_started_at <- Sys.time()
-  log_timed_message("START: ", step_name)
-  result <- force(expr)
-  step_elapsed <- as.numeric(difftime(Sys.time(), step_started_at, units = "secs"))
-  log_timed_message("DONE: ", step_name, " (", sprintf("%.2f", step_elapsed), "s)")
-  result
-}
 
 invisible(timed_step("Source INF SQL query script", source(file.path(bundle_scripts_dir, "INF_SQLquery_25-26.R"))))
 
-invisible(timed_step("Source INF data cleaning script", source(file.path(bundle_scripts_dir, "INF_DataCleaning_25-26.R"))))
+invisible(timed_step("Source INF data cleaning script", source(file.path(bundle_scripts_dir, "INF_DataCleaning.R"))))
 
 # ==============================================================================
 # Setup
@@ -40,66 +24,6 @@ invisible(init_report_pipeline(
   common_utils_path = "Source_files/common_report_utils.R",
   suppress_startup = TRUE
 ))
-plot_run_quality_stacked <- function(
-  run_quality_df,
-  y_var = c("percent", "n"),
-  title_txt = "Quality per run",
-  fill_label = "Status",
-  label_mode = c("both", "n", "percent"),
-  status_colors = NULL
-) {
-  y_var <- match.arg(y_var)
-  label_mode <- match.arg(label_mode)
-  if (is.null(run_quality_df) || nrow(run_quality_df) == 0) return(NULL)
-
-  d <- run_quality_df %>%
-    dplyr::count(run_id, run_quality_status, name = "n") %>%
-    dplyr::group_by(run_id) %>%
-    dplyr::mutate(percent = 100 * n / sum(n)) %>%
-    dplyr::ungroup() %>%
-    dplyr::mutate(
-      label_txt = if (label_mode == "n") {
-        paste0("n=", scales::comma(n))
-      } else if (label_mode == "percent") {
-        paste0("%=", round(percent, 1))
-      } else {
-        paste0("n=", scales::comma(n), "\n%=", round(percent, 1))
-      }
-    )
-
-  if (is.null(status_colors)) {
-    status_levels <- unique(as.character(d$run_quality_status))
-    if (all(c("Passed", "Not passed") %in% status_levels)) {
-      status_colors <- c("Passed" = "#179463", "Not passed" = "#d74b46")
-    } else if (all(c("Submitted", "Not submitted") %in% status_levels)) {
-      status_colors <- c("Submitted" = "#179463", "Not submitted" = "#d74b46")
-    } else {
-      status_colors <- stats::setNames(
-        fhi_discrete_palette(length(status_levels), kvalitativ_comb),
-        status_levels
-      )
-    }
-  }
-
-  ggplot2::ggplot(d, ggplot2::aes(x = run_id, y = .data[[y_var]], fill = run_quality_status)) +
-    ggplot2::geom_col(position = "stack") +
-    ggplot2::geom_text(
-      ggplot2::aes(label = ifelse(n > 0, label_txt, "")),
-      position = ggplot2::position_stack(vjust = 0.5),
-      size = 2.8,
-      lineheight = 0.9
-    ) +
-    ggplot2::scale_fill_manual(values = status_colors, drop = FALSE) +
-    ggplot2::labs(
-      title = title_txt,
-      x = "NGS run id",
-      y = ifelse(y_var == "percent", "Andel (%)", "Antall (n)"),
-      fill = fill_label
-    ) +
-    {if (y_var == "percent") ggplot2::scale_y_continuous(labels = scales::percent_format(scale = 1), limits = c(0, 100)) else ggplot2::scale_y_continuous()} +
-    ggplot2::theme_minimal(base_size = 12) +
-    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
-}
 
 
 Sys.setlocale("LC_TIME", "nb_NO.utf8")
@@ -181,7 +105,7 @@ fludb <- fludb %>%
 
 fludb <- fludb %>%
   mutate(
-    pasient_alder = as.numeric(trimws(pasient_alder)) # Trim whitespace and convert to numeric
+    pasient_alder = as.numeric(trimws(pasient_alder))
   )
 
 
@@ -233,11 +157,29 @@ fludb <- fludb %>%
     prove_project_clean = ifelse(prove_kategori_group == "Non-Sentinel", clean_project_code(prove_kategori), NA_character_)
   )
 
-invisible(timed_step("Run FLuDB QC checks", source(file.path(bundle_scripts_dir, "INF_QC_25-26.R"))))
+invisible(timed_step("Run FLuDB QC checks", source(file.path(bundle_scripts_dir, "INF_QualityControl.R"))))
 
-season_info <- current_and_previous_seasons(Sys.Date())
+# Change this one value to 2026L for the 2026/27 report.
+reporting_season_start_year <- 2025L
+season_info <- season_info_from_start_year(reporting_season_start_year)
 current_season_label <- season_info$current_label
 previous_season_label <- season_info$previous_label
+reporting_season_bounds <- season_info$current_bounds
+
+# One-off extension for the requested Sesongrapport; normal seasonal runs are unchanged.
+temporary_sesongrapport <- tolower(Sys.getenv("INF_TEMPORARY_SESONGRAPPORT", unset = "false")) %in% c("1", "true", "yes")
+reporting_window_bounds <- reporting_season_bounds
+if (temporary_sesongrapport) {
+  reporting_window_bounds$start <- as.Date(sprintf("%d-07-01", reporting_season_start_year))
+  message("Temporary Sesongrapport window: ", reporting_window_bounds$start, " to ", reporting_window_bounds$end)
+}
+
+fludb_all <- fludb
+fludb <- fludb_all %>%
+  filter(
+    prove_tatt >= reporting_window_bounds$start,
+    prove_tatt <= reporting_window_bounds$end
+  )
 
 format_presentation_season <- function(season_label) {
   season_chr <- as.character(season_label)
@@ -514,7 +456,7 @@ patient_metadata_columns <- c(
   "prove_tatt", "month_year", "week_year", "year",
   "pasient_alder", "pasient_aldersgruppe",
   "pasient_status", "pasient_landsdel", "pasient_fylke_name",
-  "prove_kategori", "ngs_sekvens_resultat", "tessy_reportable_variable",
+  "prove_kategori", "ngs_sekvens_resultat", "tessy_reportable_variable", "gisaid_isolate_name",
   "nc_ha_clade", "nc_ha_subclade"
 )
 patient_metadata_columns <- intersect(patient_metadata_columns, names(fludb))
@@ -831,6 +773,203 @@ export_graph_f <- add_section_output(
   "Sammendragstabeller beregnet direkte fra fludb"
 )
 
+# The season overview that feeds the Word report is also included in the
+# standard analysis output. "Sequencing attempted" is calculated directly from
+# raw BioNumerics entries in the report date range, excluding references only.
+# It is intentionally independent of NGS result, GISAID name, and Tessy value.
+if (exists("INF_25_26_raw_merged") &&
+    all(c("prove_tatt", "prove_kategori") %in% names(INF_25_26_raw_merged))) {
+  sequencing_attempted_data <- INF_25_26_raw_merged %>%
+    mutate(
+      attempted_date = as.Date(as.character(prove_tatt)),
+      attempted_category = dplyr::coalesce(as.character(prove_kategori), "")
+    ) %>%
+    filter(
+      !is.na(attempted_date),
+      attempted_date >= reporting_window_bounds$start,
+      attempted_date <= reporting_window_bounds$end,
+      !str_detect(attempted_category, regex("ref", ignore_case = TRUE))
+    )
+  sequencing_attempted_n <- if ("key" %in% names(sequencing_attempted_data)) {
+    sequencing_attempted_data %>%
+      filter(!is.na(key), trimws(as.character(key)) != "") %>%
+      summarise(n = n_distinct(key)) %>%
+      pull(n)
+  } else {
+    nrow(sequencing_attempted_data)
+  }
+} else {
+  warning("Sequencing attempted could not be calculated because raw BioNumerics data are unavailable.")
+  sequencing_attempted_n <- NA_integer_
+}
+
+season_overview_data <- fludb %>%
+  mutate(
+    overview_subtype = case_when(
+      ngs_sekvens_resultat == "A/H1N1" ~ "Influensa A/H1N1",
+      ngs_sekvens_resultat == "A/H3N2" ~ "Influensa A/H3N2",
+      ngs_sekvens_resultat == "B/Victoria" ~ "Influensa B/Victoria",
+      TRUE ~ "Annet/ukjent"
+    ),
+    overview_surveillance = if_else(
+      prove_kategori_group == "Sentinel",
+      "Sentinel",
+      "Generell overvåking"
+    ),
+    overview_age = if_else(
+      is.na(pasient_aldersgruppe) | trimws(as.character(pasient_aldersgruppe)) == "",
+      "Ukjent/ikke oppgitt",
+      as.character(pasient_aldersgruppe)
+    )
+  )
+
+if (any(c("pasient_kjnn", "pasient_kjonn") %in% names(season_overview_data))) {
+  season_overview_data <- season_overview_data %>%
+    normalize_sex_column(candidate_cols = c("pasient_kjnn", "pasient_kjonn")) %>%
+    mutate(
+      overview_sex = case_when(
+        pasient_kjonn_std == "Female" ~ "Kvinne",
+        pasient_kjonn_std == "Male" ~ "Mann",
+        TRUE ~ "Ukjent/ikke oppgitt"
+      )
+    )
+} else {
+  season_overview_data$overview_sex <- "Ukjent/ikke oppgitt"
+}
+
+if ("gisaid_isolate_name" %in% names(season_overview_data)) {
+  season_overview_data <- season_overview_data %>%
+    mutate(
+      overview_gisaid_name = if_else(
+        is.na(gisaid_isolate_name) |
+          trimws(as.character(gisaid_isolate_name)) %in% c("", "NA", "NULL"),
+        "Mangler GISAID-isolatnavn",
+        "GISAID-isolatnavn oppgitt"
+      )
+    )
+} else {
+  season_overview_data$overview_gisaid_name <- "Felt mangler i datagrunnlaget"
+}
+
+season_overview_distribution <- function(data, variable, section, category_levels = NULL) {
+  counts <- data %>% count(Kategori = .data[[variable]], name = "Antall")
+  if (!is.null(category_levels)) {
+    counts <- tibble(Kategori = category_levels) %>%
+      left_join(counts, by = "Kategori") %>%
+      mutate(Antall = coalesce(Antall, 0L))
+  }
+
+  counts %>%
+    mutate(
+      Seksjon = section,
+      Andel_pct = round(100 * Antall / nrow(data), 1)
+    ) %>%
+    select(Seksjon, Kategori, Antall, Andel_pct)
+}
+
+season_overview_table <- bind_rows(
+  tibble(
+    Seksjon = "Sekvensering",
+    Kategori = "Sequencing attempted (BioNumerics, ikke referanse)",
+    Antall = sequencing_attempted_n,
+    Andel_pct = NA_real_
+  ),
+  tibble(
+    Seksjon = "Sekvensering",
+    Kategori = "Totalt antall sekvenserte virus",
+    Antall = nrow(season_overview_data),
+    Andel_pct = 100
+  ),
+  season_overview_distribution(
+    season_overview_data,
+    "overview_subtype",
+    "Virus",
+    c("Influensa A/H1N1", "Influensa A/H3N2", "Influensa B/Victoria", "Annet/ukjent")
+  ),
+  season_overview_distribution(
+    season_overview_data,
+    "overview_surveillance",
+    "Overvåking",
+    c("Sentinel", "Generell overvåking")
+  ),
+  season_overview_distribution(
+    season_overview_data,
+    "overview_sex",
+    "Kjønn",
+    c("Kvinne", "Mann", "Ukjent/ikke oppgitt")
+  ),
+  season_overview_distribution(
+    season_overview_data,
+    "overview_age",
+    "Aldersfordeling",
+    c("0-4", "5-14", "15-24", "25-59", "60+", "Ukjent/ikke oppgitt")
+  ),
+  season_overview_distribution(
+    season_overview_data,
+    "overview_gisaid_name",
+    "GISAID-isolatnavn",
+    c("GISAID-isolatnavn oppgitt", "Mangler GISAID-isolatnavn", "Felt mangler i datagrunnlaget")
+  )
+)
+names(season_overview_table)[names(season_overview_table) == "Andel_pct"] <- "Andel (%)"
+
+export_graph_f <- add_table_output(
+  export_graph_f,
+  season_overview_table,
+  "Influensa: sesongoversikt for rapporteringsvariabler"
+)
+excel_export_sheets[["Sesongoversikt"]] <- season_overview_table
+
+# Full normal-report line list for Excel, with a compact recent extract for the
+# PowerPoint deck. Keep records with a missing name: that makes missing GISAID
+# isolate names visible instead of silently excluding otherwise reportable data.
+if ("gisaid_isolate_name" %in% names(fludb)) {
+  gisaid_reporting_table <- fludb %>%
+    filter(
+      ngs_sekvens_resultat %in% flu_reportable_subtypes,
+      !(is.na(tessy_reportable_variable) |
+        trimws(as.character(tessy_reportable_variable)) %in% c("", "NA", "NULL"))
+    ) %>%
+    transmute(
+      provedato = as.Date(prove_tatt),
+      Virus = as.character(ngs_sekvens_resultat),
+      WHO_ECDC_rapporteringsvariabel = trimws(as.character(tessy_reportable_variable)),
+      GISAID_isolatnavn = dplyr::if_else(
+        is.na(gisaid_isolate_name) |
+          trimws(as.character(gisaid_isolate_name)) %in% c("", "NA", "NULL"),
+        "Ikke oppgitt",
+        trimws(as.character(gisaid_isolate_name))
+      ),
+      Klade = dplyr::coalesce(na_if(trimws(as.character(nc_ha_clade)), ""), "Ikke oppgitt"),
+      Subklade = dplyr::coalesce(na_if(trimws(as.character(nc_ha_subclade)), ""), "Ikke oppgitt")
+    ) %>%
+    arrange(desc(provedato), Virus, GISAID_isolatnavn)
+} else {
+  gisaid_reporting_table <- tibble(
+    provedato = as.Date(NA),
+    Virus = "",
+    WHO_ECDC_rapporteringsvariabel = "",
+    GISAID_isolatnavn = "Kolonnen gisaid_isolate_name finnes ikke i datagrunnlaget.",
+    Klade = "",
+    Subklade = ""
+  )
+}
+
+names(gisaid_reporting_table) <- c(
+  "Prøvedato", "Virus", "WHO/ECDC rapporteringsvariabel",
+  "GISAID isolatnavn", "Klade", "Subklade"
+)
+gisaid_reporting_table_ppt <- gisaid_reporting_table %>%
+  select(all_of(c("Prøvedato", "Virus", "WHO/ECDC rapporteringsvariabel", "GISAID isolatnavn"))) %>%
+  slice_head(n = 10)
+
+export_graph_f <- add_table_output(
+  export_graph_f,
+  gisaid_reporting_table_ppt,
+  "Influensa: GISAID-isolatnavn og WHO/ECDC-rapporteringsvariabel (10 nyeste)"
+)
+excel_export_sheets[["GISAID_isolatnavn_rapportering"]] <- gisaid_reporting_table
+
 
 # Calculate Sample category and pasient status tables
 prove_cat <- fludb %>%
@@ -928,7 +1067,7 @@ prove_cat_m_heat <- prove_cat_m_long %>%
   ungroup() %>%
   filter(is.finite(percentage)) %>%
   ggplot(aes(x = month_date, y = pasient_status, fill = percentage)) +
-  geom_tile(color = "white", linewidth = 0.2) +
+  geom_tile(color = fhi_colour("paper"), linewidth = 0.2) +
   geom_text(aes(label = sprintf("%.0f", percentage)), size = 2.6, color = fhi_text_dark) +
   facet_wrap(~prove_kategori, scales = "free_y") +
   scale_fill_gradientn(
@@ -1501,6 +1640,107 @@ antiviral <- fludb %>%
   )
 
 
+# Case-level resistance table: NA inhibitors use NA mutations, while
+# baloxavir uses PA mutations. Adamantane/M2 findings are intentionally omitted.
+dr_resistance_codes <- c("AARI", "AAHRI", "AARS")
+
+is_dr_resistance <- function(x) {
+  value <- toupper(trimws(as.character(x)))
+  !is.na(value) & value %in% dr_resistance_codes
+}
+
+has_dr_mutation <- function(x) {
+  value <- toupper(trimws(as.character(x)))
+  !is.na(value) &
+    nzchar(value) &
+    !(value %in% c("NA", "N/A", "NO MUTATIONS", "NO MUTATION"))
+}
+
+display_dr_value <- function(x) {
+  value <- trimws(as.character(x))
+  missing_value <- is.na(value) |
+    !nzchar(value) |
+    toupper(value) %in% c("NA", "N/A", "UKJENT", "UNKNOWN", "IKKE SATT")
+  value[missing_value] <- "Ukjent/ikke oppgitt"
+  value
+}
+
+drug_resistance_case_table <- fludb %>%
+  mutate(
+    na_mutation_present = has_dr_mutation(dr_na_mut),
+    pa_mutation_present = has_dr_mutation(dr_pa_mut)
+  ) %>%
+  rowwise() %>%
+  mutate(
+    na_resistance_drugs = paste(
+      c(
+        if (na_mutation_present && is_dr_resistance(dr_res_oseltamivir)) "Oseltamivir",
+        if (na_mutation_present && is_dr_resistance(dr_res_peramivir)) "Peramivir",
+        if (na_mutation_present && is_dr_resistance(dr_res_zanamivir)) "Zanamivir",
+        if (na_mutation_present && is_dr_resistance(dr_res_laninamivir)) "Laninamivir"
+      ),
+      collapse = ", "
+    ),
+    pa_resistance_drugs = paste(
+      c(
+        if (pa_mutation_present && is_dr_resistance(dr_res_baloxavir)) "Baloxavir"
+      ),
+      collapse = ", "
+    ),
+    resistance_mutation = paste(
+      c(
+        if (nzchar(na_resistance_drugs)) {
+          paste0("NA: ", na_resistance_drugs, " (", dr_na_mut, ")")
+        },
+        if (nzchar(pa_resistance_drugs)) {
+          paste0("PA: ", pa_resistance_drugs, " (", dr_pa_mut, ")")
+        }
+      ),
+      collapse = "; "
+    )
+  ) %>%
+  ungroup() %>%
+  filter(nzchar(resistance_mutation)) %>%
+  transmute(
+    Prove_ID = as.character(key),
+    Virus = ngs_sekvens_resultat,
+    Proveuke = if_else(
+      is.na(prove_tatt),
+      "Ukjent/ikke oppgitt",
+      paste0(isoyear(prove_tatt), "-W", sprintf("%02d", isoweek(prove_tatt)))
+    ),
+    Fylke = display_dr_value(pasient_fylke_name),
+    Alder = if_else(
+      is.na(pasient_alder),
+      "Ukjent/ikke oppgitt",
+      as.character(pasient_alder)
+    ),
+    Antiviral_behandling = display_dr_value(pasient_antiviralbehandling),
+    Resistensmutasjon = resistance_mutation
+  ) %>%
+  arrange(Proveuke, Virus, Prove_ID)
+
+if (nrow(drug_resistance_case_table) == 0) {
+  drug_resistance_case_table <- tibble(
+    Prove_ID = "Ingen prover med NA- eller PA-resistensmutasjon",
+    Virus = "",
+    Proveuke = "",
+    Fylke = "",
+    Alder = "",
+    Antiviral_behandling = "",
+    Resistensmutasjon = ""
+  )
+}
+
+names(drug_resistance_case_table) <- c(
+  "Prove-ID",
+  "Virus",
+  "Proveuke",
+  "Fylke",
+  "Alder",
+  "Antiviral behandling",
+  "Resistensmutasjon"
+)
 # Define a function to calculate resistance percentages, ignoring NA for the specific drug
 # Define a function to calculate resistance percentages, ignoring NA for the specific drug
 calculate_resistance <- function(data, column_name) {
@@ -1567,6 +1807,13 @@ for (subtype in unique(antiviral$ngs_sekvens_resultat)) {
 
 # Combine results into a single data frame
 result <- bind_rows(results_list)
+export_graph_f <- add_table_output(
+  export_graph_f,
+  drug_resistance_case_table,
+  "Prover med NA- eller PA-resistensmutasjon (adamantan ekskludert)"
+)
+
+
 
 # Define a list of data frames and their respective captions
 table_data <- list(
@@ -2235,7 +2482,7 @@ ha_mutation_trend_source <- fludb %>%
   )
 
 ha_mutation_subtype_order <- flu_reportable_subtypes
-last_four_month_start <- floor_date(Sys.Date(), unit = "month") %m-% months(3)
+last_four_month_start <- max(reporting_window_bounds$start, floor_date(min(as.Date(Sys.Date()), reporting_window_bounds$end), unit = "month") %m-% months(3))
 
 for (current_subtype in ha_mutation_subtype_order) {
   subtype_trend_source <- ha_mutation_trend_source %>%
@@ -2712,7 +2959,7 @@ create_epitope_lollipop_plot <- function(df, subtype_label, subtitle_label, face
     epitope_levels
   )
   if ("Ukjent" %in% names(epitope_palette)) {
-    epitope_palette["Ukjent"] <- "#000000"
+    epitope_palette["Ukjent"] <- fhi_colour("unknown")
   }
 
   base_plot <- ggplot(df_plot, aes(x = Number, y = y_layout, color = epitope_label)) +
@@ -3118,7 +3365,7 @@ export_graph_f <- add_section_output(
 )
 
 # Step 1: Filter the dataset for relevant subtypes, keep the last 6 months, and select columns
-heatmap_month_window_start <- floor_date(Sys.Date() %m-% months(5), unit = "month")
+heatmap_month_window_start <- max(reporting_window_bounds$start, floor_date(min(as.Date(Sys.Date()), reporting_window_bounds$end), unit = "month") %m-% months(5))
 
 filtered_fludb <- fludb %>%
   mutate(
@@ -3314,22 +3561,29 @@ for (mutation in mutation_columns) {
 # Get the current week and year
 current_week <- lubridate::isoweek(Sys.Date())
 current_year <- year(Sys.Date())
-results_root <- Sys.getenv("INF_RESULTS_DIR", unset = "N:/Virologi/Influensa/2526/WGS_Analyse/Results")
-results_share_root <- Sys.getenv(
-  "INF_RESULTS_SHARE_DIR",
-  unset = "C:/Users/aroh/OneDrive - Folkehelseinstituttet/Sesong 2025_26"
+results_root <- report_output_dir(
+  Sys.getenv("INF_RESULTS_DIR", unset = "N:/Virologi/Influensa/2526/WGS_Analyse/Results"),
+  scope = "INF"
+)
+results_share_root <- report_output_dir(
+  Sys.getenv("INF_RESULTS_SHARE_DIR", unset = "C:/Users/aroh/OneDrive - Folkehelseinstituttet/Sesong 2025_26"),
+  scope = "INF/share"
 )
 
 
 # Create the file name including the season
-file_name_result <- paste0(
-  "Influenza_",
-  "_Week.",
-  current_week,
-  "-",
-  current_year,
-  "_result.pptx"
-)
+file_name_result <- if (temporary_sesongrapport) {
+  paste0("Sesongrapport_Week.", current_week, "-", current_year, "_result.pptx")
+} else {
+  paste0(
+    "Influenza_",
+    "_Week.",
+    current_week,
+    "-",
+    current_year,
+    "_result.pptx"
+  )
+}
 # Specify the full file paths
 file_path_result <- file.path(
   results_root,
@@ -3355,8 +3609,8 @@ add_meta_plot <- function(presentation, plot_obj, plot_title) {
 
 
 norway_geojson_path <- resolve_norway_geojson_path()
-flu_prev <- fludb %>% filter(season == previous_season_label)
-flu_curr <- fludb %>% filter(season == current_season_label)
+flu_prev <- fludb_all %>% filter(season == previous_season_label)
+flu_curr <- fludb_all %>% filter(season == current_season_label)
 shared_fylke_fill_limits <- c(
   0,
   max(
@@ -3407,7 +3661,7 @@ if (all(c("pasient_kjnn", "season", "prove_tatt") %in% names(fludb))) {
     fhi_discrete_palette(3, kvalitativ_comb),
     c("Female", "Male", "Ukjent")
   )
-  kjonn_compare <- fludb %>%
+  kjonn_compare <- fludb_all %>%
     normalize_sex_column(candidate_cols = c("pasient_kjnn", "pasient_kjonn")) %>%
     mutate(
       pasient_kjonn_std = factor(
@@ -3491,7 +3745,7 @@ if (all(c("pasient_kjnn", "season", "prove_tatt") %in% names(fludb))) {
 
 # Aldersgruppe: season comparison in same side-by-side format as Kjønn.
 if (all(c("pasient_aldersgruppe", "season") %in% names(fludb))) {
-  alder_compare <- fludb %>%
+  alder_compare <- fludb_all %>%
     mutate(
       pasient_aldersgruppe = ifelse(
         is.na(pasient_aldersgruppe) | trimws(as.character(pasient_aldersgruppe)) == "",
@@ -3628,14 +3882,18 @@ if (!is.na(subclade_color_col) && !is.null(virus_col) && "prove_tatt" %in% names
   }
 }
 
-excel_export_file_name_xlsx <- paste0(
-  "Influenza_",
-  "_Week.",
-  current_week,
-  "-",
-  current_year,
-  "_tabeller.xlsx"
-)
+excel_export_file_name_xlsx <- if (temporary_sesongrapport) {
+  paste0("Sesongrapport_Week.", current_week, "-", current_year, "_tabeller.xlsx")
+} else {
+  paste0(
+    "Influenza_",
+    "_Week.",
+    current_week,
+    "-",
+    current_year,
+    "_tabeller.xlsx"
+  )
+}
 excel_export_prefix_csv <- sub("\\.xlsx$", "", excel_export_file_name_xlsx)
 
 excel_export_path_result_xlsx <- file.path(

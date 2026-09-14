@@ -1,21 +1,13 @@
-# =============================================================================
-# WORK IN PROGRESS — reviewed, behaviour-preserving copy
-#
-# Purpose: This file is a maintainability-focused review copy of RSV_Analysis.R.
-# Changes in the WIP series are limited to structure, documentation, and WIP
-# dependency isolation. The calculations, filters, object names, and exported
-# outputs are retained so results can be compared directly with production.
-# =============================================================================
 
-source("development/Source_files/pipeline_bootstrap.R")
-source("development/Source_files/report_export.R")
+source("Source_files/pipeline_bootstrap.R")
+source("Source_files/report_export.R")
 
 bundle_scripts_dir <- resolve_script_dir()
 analysis_started_at <- Sys.time()
 
 invisible(timed_step('Source RSV SQL query', source(file.path(bundle_scripts_dir, 'RSV_SQLquery.R'))))
 
-invisible(timed_step('Source RSV data cleaning', source(file.path(bundle_scripts_dir, 'RSV_DataCleaning_23-24.R'))))
+invisible(timed_step('Source RSV data cleaning', source(file.path(bundle_scripts_dir, 'RSV_DataCleaning.R'))))
 
 required_packages <- c(
   "dplyr", "ggplot2", "lubridate", "tidyr", "scales", "officer", "openxlsx", "patchwork"
@@ -27,17 +19,10 @@ invisible(init_report_pipeline(
 
 Sys.setlocale('LC_TIME', 'nb_NO.utf8')
 
-parse_prove_tatt <- function(x) {
-  x <- as.character(x)
-  x <- trimws(x)
-  x[x == ''] <- NA_character_
-  parsed <- suppressWarnings(lubridate::parse_date_time(x, orders = c('Y-m-d', 'd.m.Y', 'd/m/Y', 'Y/m/d')))
-  as.Date(parsed)
-}
 
 rsvdb <- rsvdb %>%
   mutate(
-    prove_tatt = parse_prove_tatt(prove_tatt),
+    prove_tatt = parse_surveillance_date(prove_tatt),
     season = season_label_from_date(prove_tatt),
     month_date = floor_date(prove_tatt, unit = 'month'),
     month_label = format_month_label(month_date),
@@ -65,9 +50,19 @@ rsvdb <- rsvdb %>%
 
 rsvdb <- normalize_sex_column(rsvdb, candidate_cols = c('pasient_kjonn', 'pasient_kjnn'))
 
-season_info <- current_and_previous_seasons(Sys.Date())
+# Change this one value to 2026L for the 2026/27 report.
+reporting_season_start_year <- 2025L
+season_info <- season_info_from_start_year(reporting_season_start_year)
 current_season_label <- season_info$current_label
 previous_season_label <- season_info$previous_label
+reporting_season_bounds <- season_info$current_bounds
+
+rsvdb_all <- rsvdb
+rsvdb <- rsvdb_all %>%
+  filter(
+    prove_tatt >= reporting_season_bounds$start,
+    prove_tatt <= reporting_season_bounds$end
+  )
 
 month_levels <- rsvdb %>%
   distinct(month_date, month_label) %>%
@@ -245,7 +240,7 @@ export_graph_f <- add_section_slide(
 
 if ('pasient_aldersgruppe' %in% names(rsvdb)) {
   p_age_pie <- build_two_season_pie_compare(
-    rsvdb %>% filter(!is.na(pasient_aldersgruppe), trimws(as.character(pasient_aldersgruppe)) != ''),
+    rsvdb_all %>% filter(!is.na(pasient_aldersgruppe), trimws(as.character(pasient_aldersgruppe)) != ''),
     season_col = 'season',
     category_col = 'pasient_aldersgruppe',
     previous_label = previous_season_label,
@@ -268,8 +263,8 @@ if (all(c('pasient_fylke_name', 'pasient_landsdel', 'season') %in% names(rsvdb))
   )
 
   norway_geojson_path <- resolve_norway_geojson_path()
-  rsv_prev <- rsvdb %>% filter(season == previous_season_label)
-  rsv_curr_map <- rsvdb %>% filter(season == current_season_label)
+  rsv_prev <- rsvdb_all %>% filter(season == previous_season_label)
+  rsv_curr_map <- rsvdb_all %>% filter(season == current_season_label)
 
   p_fylke_prev <- build_fylke_map_plot_shared(
     rsv_prev,
@@ -421,7 +416,7 @@ if (!is.na(rsv_indel_date_col) && length(rsv_indel_cols) > 0) {
 
   if (nrow(mut_counts) > 0) {
     p_indel <- ggplot(mut_counts, aes(x = indel_month, y = mutation_gene, fill = percent)) +
-      geom_tile(color = 'white') +
+      geom_tile(color = fhi_colour('paper')) +
       facet_wrap(~ subtype_group, ncol = 1, scales = 'free_y') +
       scale_fill_gradientn(colors = kvantitativ_b1, labels = percent_format(scale = 1)) +
       scale_x_date(labels = format_month_label, breaks = scales::date_breaks('1 month')) +
@@ -435,8 +430,14 @@ if (!is.na(rsv_indel_date_col) && length(rsv_indel_cols) > 0) {
 
 current_week <- week(Sys.Date())
 current_year <- year(Sys.Date())
-results_root <- 'N:/Virologi/Influensa/2526/WGS_Analyse/Results'
-results_share_root <- 'C:/Users/aroh/OneDrive - Folkehelseinstituttet/Sesong 2025_26'
+results_root <- report_output_dir(
+  Sys.getenv('RSV_RESULTS_DIR', unset = 'N:/Virologi/Influensa/2526/WGS_Analyse/Results'),
+  scope = 'RSV'
+)
+results_share_root <- report_output_dir(
+  Sys.getenv('RSV_RESULTS_SHARE_DIR', unset = 'C:/Users/aroh/OneDrive - Folkehelseinstituttet/Sesong 2025_26'),
+  scope = 'RSV/share'
+)
 
 ppt_name <- paste0('RSV_Week.', current_week, '-', current_year, '_result.pptx')
 xlsx_name <- paste0('RSV_Week.', current_week, '-', current_year, '_tabeller.xlsx')

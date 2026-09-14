@@ -1,0 +1,10 @@
+# R and RStudio session state
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+
+# Generated local artifacts
+*.log
+Results/
+_sesongrapport_test_output/
