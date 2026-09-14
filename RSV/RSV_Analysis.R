@@ -1,6 +1,7 @@
 
 source("Source_files/pipeline_bootstrap.R")
 source("Source_files/report_export.R")
+invisible(init_locale())
 
 bundle_scripts_dir <- resolve_script_dir()
 analysis_started_at <- Sys.time()
@@ -17,7 +18,6 @@ invisible(init_report_pipeline(
   common_utils_path = "Source_files/common_report_utils.R"
 ))
 
-Sys.setlocale('LC_TIME', 'nb_NO.utf8')
 
 
 rsvdb <- rsvdb %>%

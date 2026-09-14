@@ -1,6 +1,7 @@
 
 source("Source_files/pipeline_bootstrap.R")
 source("Source_files/report_export.R")
+invisible(init_locale())
 
 bundle_scripts_dir <- resolve_script_dir()
 
@@ -26,7 +27,6 @@ invisible(init_report_pipeline(
 ))
 
 
-Sys.setlocale("LC_TIME", "nb_NO.utf8")
 export_graph_f <- read_pptx()
 excel_export_sheets <- list()
 report_week <- lubridate::isoweek(Sys.Date())
