@@ -77,6 +77,11 @@ check_install_update_packages(required_packages)
 suppressPackageStartupMessages(lapply(required_packages, library, character.only = TRUE))
 
 source(file.path(bundle_scripts_dir, "RSV_SQLquery.R"))
+source(file.path(dirname(bundle_scripts_dir), "Source_files", "common_report_utils.R"))
+# Change this one value to 2026L for the 2026/27 report.
+reporting_season_start_year <- 2025L
+reporting_season_info <- season_info_from_start_year(reporting_season_start_year)
+reporting_season_bounds <- reporting_season_info$current_bounds
 source(file.path(bundle_scripts_dir, "RSV_DataCleaning_23-24.R"))
 
 if (!exists("rsvdb")) {
@@ -86,14 +91,7 @@ if (!exists("rsvdb")) {
 OUTPUT_DIR <- "N:/Virologi/Influensa/2526/WGS_Analyse/Results/Statistikk"
 dir.create(OUTPUT_DIR, recursive = TRUE, showWarnings = FALSE)
 
-season_label <- function(x) {
-  d <- as.Date(x)
-  y <- year(d)
-  m <- month(d)
-  start_year <- ifelse(m >= 9, y, y - 1)
-  end_year_short <- sprintf("%02d", (start_year + 1) %% 100)
-  paste0(start_year, "-", end_year_short)
-}
+season_label <- season_label_from_date
 
 write_stat_csv <- function(data, subtype_label, year_value, week_value, output_dir) {
   file_name <- paste0(subtype_label, "_", year_value, "_Week", week_value, "_statistikk.csv")
@@ -152,10 +150,12 @@ if (!(clade_col %in% names(rsvdb))) {
   stop("Missing required clade column: expected `ngs_subclade` or `ngs_clade` in rsvdb.")
 }
 
-current_season <- season_label(Sys.Date())
+current_season <- reporting_season_info$current_label
 rsv_current_season <- rsvdb %>%
-  filter(season_label(prove_tatt) == current_season)
-
+  filter(
+    prove_tatt >= reporting_season_bounds$start,
+    prove_tatt <= reporting_season_bounds$end
+  )
 rsv_a <- build_subtype_table(
   data = rsv_current_season,
   subtype_regex = "A",

@@ -83,12 +83,25 @@ end_date <- yearweek(Sys.Date()) # 4 week period end
 
 set_flextable_defaults(font.size = 6)
 
-# Dynamic season boundaries (week 35 -> week 34) based on today's date.
-season_info <- current_and_previous_seasons(Sys.Date())
+# Change this one value to 2026L for the 2026/27 report.
+reporting_season_start_year <- 2025L
+season_info <- season_info_from_start_year(reporting_season_start_year)
 current_season_label <- season_info$current_label
 previous_season_label <- season_info$previous_label
-current_season_bounds <- season_window_bounds(season_info$current_start_year)
-data_window_start <- min(current_season_bounds$start, Sys.Date() %m-% months(6))
+current_season_bounds <- season_info$current_bounds
+data_window_start <- current_season_bounds$start
+data_window_end <- current_season_bounds$end
+reporting_season_title <- sprintf("Sesong %d/%02d", reporting_season_start_year, (reporting_season_start_year + 1L) %% 100L)
+analysis_window_end <- min(as.Date(Sys.Date()), data_window_end)
+reporting_month_end <- floor_date(analysis_window_end, unit = "month")
+month_window_start <- function(n_months) {
+  candidate <- floor_date(analysis_window_end, unit = "month") %m-% months(n_months - 1L)
+  max(data_window_start, as.Date(candidate))
+}
+recent_12m_start <- month_window_start(12L)
+recent_6m_start <- month_window_start(6L)
+recent_4m_start <- month_window_start(4L)
+recent_2m_start <- month_window_start(2L)
 
 Seqlim <- 10 # How many sequences need to be valid per week to include in the analysis
 export_graph <- read_pptx() # power point placeholder for the results
@@ -206,7 +219,9 @@ export_to_ppt <- function(presentation, content, slide_title, slide_subtitle = N
   presentation <- officer::ph_with(presentation, value = title_value, location = title_location)
 
   if (inherits(content, "ggplot") || inherits(content, "patchwork")) {
-    if (exists("normalize_object_text", mode = "function")) {
+    if (exists("normalize_plot_text", mode = "function")) {
+      content <- normalize_plot_text(content)
+    } else if (exists("normalize_object_text", mode = "function")) {
       content <- normalize_object_text(content)
     }
     content <- apply_slide_plot_theme(content)
@@ -560,7 +575,7 @@ sc2_section_titles <- c(
 export_graph <- add_report_title_slide(
   export_graph,
   report_title = "SARS-CoV-2-overvåking",
-  report_subtitle = paste0("Uke ", current_week_title, " - ", current_year_title),
+  report_subtitle = paste0(reporting_season_title, " | Uke ", current_week_title, " - ", current_year_title),
   slide_title = paste0("SARS-CoV-2 Uke ", current_week_title)
 )
 export_graph <- add_report_index_slide(
@@ -662,6 +677,22 @@ if (exists("SC2db_v")) {
     )
 }
 
+SC2db_all <- SC2db
+SC2db <- SC2db_all %>%
+  filter(
+    prove_tatt >= data_window_start,
+    prove_tatt <= data_window_end
+  )
+
+if (exists("SC2db_v")) {
+  SC2db_v_all <- SC2db_v
+  SC2db_v <- SC2db_v_all %>%
+    filter(
+      prove_tatt >= data_window_start,
+      prove_tatt <= data_window_end
+    )
+}
+
 
 
 # ============================================================================
@@ -704,7 +735,7 @@ if (!is.na(eda_tessy_col)) {
       pasient_vaks_plot = if (has_pas_vaks_col) ifelse(is.na(pasient_vaks) | trimws(as.character(pasient_vaks)) == "", "Ukjent", as.character(pasient_vaks)) else "Ukjent",
       pasient_vaks_2uipt_plot = if (has_pas_vaks_2u_col) ifelse(is.na(pasient_vaks_2uipt) | trimws(as.character(pasient_vaks_2uipt)) == "", "Ukjent", as.character(pasient_vaks_2uipt)) else "Ukjent"
     ) %>%
-    filter(!is.na(plot_date_window), plot_date_window >= data_window_start)
+    filter(!is.na(plot_date_window), plot_date_window >= data_window_start, plot_date_window <= data_window_end)
 
   column_profile <- data.frame(
     column_name = names(eda_df),
@@ -892,7 +923,8 @@ if (!is.na(ct_col) && !is.na(tessy_col) && !is.na(pango_col) && !is.na(date_col)
     ) %>%
     filter(
       !is.na(plot_date),
-      plot_date >= (Sys.Date() %m-% months(6)),
+      plot_date >= recent_6m_start,
+      plot_date <= analysis_window_end,
       !is.na(ct_raw),
       trimws(ct_raw) != "",
       is.finite(ct_value),
@@ -1026,7 +1058,7 @@ if (!is.null(ngs_qc_source)) {
 
       # Keep only run setups represented by samples from the last 12 months.
       run_levels_last12m <- ngs_qc_df %>%
-        filter(!is.na(plot_date), plot_date >= (Sys.Date() %m-% months(12))) %>%
+        filter(!is.na(plot_date), plot_date >= recent_12m_start, plot_date <= analysis_window_end) %>%
         distinct(run_setup) %>%
         pull(run_setup) %>%
         as.character()
@@ -1265,15 +1297,9 @@ export_graph <- export_to_ppt(export_graph, spmlabto, "Sekvenseringssted for SC2
 v_seqs_per_month_origin <- v_seqs_per_month_origin %>%
   mutate(my = as.Date(my))
 
-# Get the system date
-current_date <- Sys.Date()
-
-# Calculate the date threshold for filtering (12 months prior to today)
-threshold_date <- current_date %m-% months(12)
-
-# Filter the dataframe for rows with 'my' from the last 12 months
+# Filter the dataframe for the selected calendar-month twelve-month window.
 v_seqs_per_month_origin12m <- v_seqs_per_month_origin %>%
-  filter(my >= threshold_date)
+  filter(my >= recent_12m_start, my <= reporting_month_end)
 
 # Create a bar chart per month based on Origin
 spmlabto12m <- ggplot(v_seqs_per_month_origin12m, aes(x = my, y = TotalSeq, fill = Origin)) +
@@ -1316,9 +1342,9 @@ export_graph <- add_section_slide(
   export_graph,
   "Pangolin og Tessy",
   "Klassifiseringer per m\u00e5ned",
-  c("Pangolin per m\u00e5ned", "Tessy siste 12 mnd", "Tessy siste 6 mnd")
+  c("Kollapsert Pangolin - sesong", "Pangolin siste 12 mnd", "Pangolin siste 6 mnd", "Tessy-klassifisering - sesong", "Tessy siste 12 mnd", "Tessy siste 6 mnd")
 )
-sequencing_window_start <- if (exists("data_window_start")) as.Date(data_window_start) else (Sys.Date() %m-% months(6))
+sequencing_window_start <- recent_6m_start
 
 # Prepare data for the weekly sequence count
 monthcount <- SC2db %>%
@@ -1412,11 +1438,9 @@ final_pangostatistikk <- final_pangostatistikk %>%
   ))
 
 
-recent_12m_start <- Sys.Date() %m-% months(12)
-recent_6m_start <- Sys.Date() %m-% months(6)
 
 pango_recent12 <- pangomtcount %>%
-  filter(Sampledate >= recent_12m_start) %>%
+  filter(Sampledate >= recent_12m_start, Sampledate <= reporting_month_end) %>%
   collapse_minor_categories(
     category_col = "Collapsed_pango",
     value_col = "Percent",
@@ -1429,7 +1453,20 @@ pango_recent12 <- pangomtcount %>%
   summarise(count = sum(count), TotalSeq = first(TotalSeq), Percent = sum(Percent), .groups = "drop")
 
 pango_recent6 <- pangomtcount %>%
-  filter(Sampledate >= recent_6m_start) %>%
+  filter(Sampledate >= recent_6m_start, Sampledate <= reporting_month_end) %>%
+  collapse_minor_categories(
+    category_col = "Collapsed_pango",
+    value_col = "Percent",
+    other_label = "Andre SARS CoV 2",
+    min_peak_percent = 5,
+    top_n = 8,
+    preserve_categories = c("Andre SARS CoV 2")
+  ) %>%
+  group_by(Sampledate, Collapsed_pango_plot) %>%
+  summarise(count = sum(count), TotalSeq = first(TotalSeq), Percent = sum(Percent), .groups = "drop")
+
+pango_season <- pangomtcount %>%
+  filter(Sampledate >= data_window_start, Sampledate <= reporting_month_end) %>%
   collapse_minor_categories(
     category_col = "Collapsed_pango",
     value_col = "Percent",
@@ -1448,6 +1485,10 @@ names(pango_recent12_colors) <- pango_recent12_levels
 pango_recent6_levels <- unique(as.character(pango_recent6$Collapsed_pango_plot))
 pango_recent6_colors <- fhi_discrete_palette(length(pango_recent6_levels), sc2_palette)
 names(pango_recent6_colors) <- pango_recent6_levels
+
+pango_season_levels <- unique(as.character(pango_season$Collapsed_pango_plot))
+pango_season_colors <- fhi_discrete_palette(length(pango_season_levels), sc2_palette)
+names(pango_season_colors) <- pango_season_levels
 
 combined_plot_12mo <- make_percent_trend_plot(
   data = pango_recent12,
@@ -1487,15 +1528,34 @@ export_graph <- export_to_ppt(
   build_slide_subtitle(pango_recent6, "Sampledate", nrow(SC2db %>% filter(prove_tatt >= recent_6m_start)), "Andeler måned for måned | Stablede andeler øverst | Volum og trender nederst")
 )
 
+combined_plot_season <- make_percent_trend_plot(
+  data = pango_season,
+  date_col = "Sampledate",
+  percent_col = "Percent",
+  count_col = "TotalSeq",
+  category_col = "Collapsed_pango_plot",
+  color_values = pango_season_colors,
+  color_label = "Pangolin",
+  x_breaks = "1 month",
+  legend_nrow = 2
+)
+
+export_graph <- export_to_ppt(
+  export_graph,
+  combined_plot_season,
+  paste0("Kollapsert Pangolin per m\u00e5ned - ", reporting_season_title),
+  build_slide_subtitle(pango_season, "Sampledate", nrow(SC2db %>% filter(prove_tatt >= data_window_start, prove_tatt <= analysis_window_end)), paste(reporting_season_title, "| Andeler per m\u00e5ned | Stablede andeler \u00f8verst | Volum og trender nederst"))
+)
+
 # Create and save individual Pangolin variant plots for the last 12 months
-subset_data4mofpango <- subset(fpangomtcount, Sampledate >= Sys.Date() %m-% months(4))
+subset_data4mofpango <- subset(fpangomtcount, Sampledate >= recent_4m_start & Sampledate <= reporting_month_end)
 unique_collapsed_pangosrec <- subset_data4mofpango %>%
   pull(Collapsed_pango) %>%
   unique()
 
 
 # Create a summary table of Pangolin variants for the shared sequencing window
-subset_data6mopango <- subset(fpangomtcount, Sampledate >= sequencing_window_start)
+subset_data6mopango <- subset(fpangomtcount, Sampledate >= sequencing_window_start & Sampledate <= reporting_month_end)
 
 # Loop through unique 'Collapsed_pango' values
 for (collapsed_pango in unique_collapsed_pangosrec) {
@@ -1518,7 +1578,7 @@ for (collapsed_pango in unique_collapsed_pangosrec) {
       preserve_categories = c(
         "Andre undervarianter",
         subset_data %>%
-          filter(Sampledate >= (Sys.Date() %m-% months(3))) %>%
+          filter(Sampledate >= recent_6m_start) %>%
           pull(nc_pangolin_short) %>%
           as.character() %>%
           unique()
@@ -1595,7 +1655,7 @@ pangolin_count_table_full <- subset_data6mopango %>%
 #   - Per-Tessy collapsed-pango stacked chart + andel heatmap
 #   - Tessy tables and recency trend slides
 
-sequencing_window_start <- if (exists("data_window_start")) as.Date(data_window_start) else (Sys.Date() %m-% months(6))
+sequencing_window_start <- recent_6m_start
 
 # Count the number of sequences per month
 monthcount <- SC2db %>%
@@ -1618,16 +1678,16 @@ monthcount <- monthcount %>%
   mutate(Sampledate = parse_month_key_nb(my))
 
 # Subset data for shared sequencing window + short recency views
-tessy12mo <- subset(SC2db, prove_tatt >= recent_12m_start & prove_tatt <= Sys.Date())
-tessy6mo <- subset(SC2db, prove_tatt >= recent_6m_start & prove_tatt <= Sys.Date())
-subset_data12mo <- subset(tessymtcount, Sampledate >= recent_12m_start)
-subset_data2mo <- subset(tessymtcount, Sampledate >= Sys.Date() %m-% months(2))
-subset_data4mo <- subset(tessymtcount, Sampledate >= Sys.Date() %m-% months(4))
-subset_data6mo <- subset(tessymtcount, Sampledate >= recent_6m_start)
-monthcount12mo <- subset(monthcount, Sampledate >= recent_12m_start)
+tessy12mo <- subset(SC2db, prove_tatt >= recent_12m_start & prove_tatt <= analysis_window_end)
+tessy6mo <- subset(SC2db, prove_tatt >= recent_6m_start & prove_tatt <= analysis_window_end)
+subset_data12mo <- subset(tessymtcount, Sampledate >= recent_12m_start & Sampledate <= reporting_month_end)
+subset_data2mo <- subset(tessymtcount, Sampledate >= recent_2m_start & Sampledate <= reporting_month_end)
+subset_data4mo <- subset(tessymtcount, Sampledate >= recent_4m_start & Sampledate <= reporting_month_end)
+subset_data6mo <- subset(tessymtcount, Sampledate >= recent_6m_start & Sampledate <= reporting_month_end)
+monthcount12mo <- subset(monthcount, Sampledate >= recent_12m_start & Sampledate <= reporting_month_end)
 
-subset_data_season <- subset(tessymtcount, Sampledate >= recent_6m_start)
-subset_data_year <- subset(tessymtcount, Sampledate >= recent_12m_start)
+subset_data_season <- subset(tessymtcount, Sampledate >= data_window_start & Sampledate <= reporting_month_end)
+subset_data_year <- subset(tessymtcount, Sampledate >= recent_12m_start & Sampledate <= reporting_month_end)
 subset_data_season_p <- subset_data_season %>%
   mutate(Percent = (count / TotalSeq) * 100)
 subset_data_year_p <- subset_data_year %>%
@@ -1707,7 +1767,7 @@ for (i in seq_along(unique_tessyrec)) {
   }
 
   recent_sublineages <- subset_data %>%
-    filter(Sampledate >= (Sys.Date() %m-% months(3))) %>%
+    filter(Sampledate >= recent_6m_start) %>%
     pull(nc_pangolin_short) %>%
     as.character() %>%
     unique()
@@ -1859,12 +1919,39 @@ subset_data_season_plot <- subset_data_season_p %>%
     .groups = "drop"
   )
 
-tessy_recent6_levels <- unique(as.character(subset_data_season_plot$Tessy_plot))
+tessy_season_levels <- unique(as.character(subset_data_season_plot$Tessy_plot))
+tessy_season_colors <- fhi_discrete_palette(length(tessy_season_levels), sc2_palette)
+names(tessy_season_colors) <- tessy_season_levels
+
+combined_plot_season <- make_percent_trend_plot(
+  data = subset_data_season_plot,
+  date_col = "Sampledate",
+  percent_col = "Percent",
+  count_col = "TotalSeq",
+  category_col = "Tessy_plot",
+  color_values = tessy_season_colors,
+  color_label = "Tessy-klassifisering",
+  x_breaks = "1 month",
+  legend_position = "right",
+  legend_ncol = 2
+)
+
+export_graph <- export_to_ppt(
+  export_graph,
+  combined_plot_season,
+  paste0("Tessy-klassifisering per m\u00e5ned - ", reporting_season_title),
+  build_slide_subtitle(subset_data_season_plot, "Sampledate", nrow(SC2db %>% filter(prove_tatt >= data_window_start, prove_tatt <= analysis_window_end)), paste(reporting_season_title, "| Andeler per m\u00e5ned | Stablede andeler \u00f8verst | Volum og trender nederst"))
+)
+
+subset_data6mo_plot <- subset_data_season_plot %>%
+  filter(Sampledate >= recent_6m_start, Sampledate <= reporting_month_end)
+
+tessy_recent6_levels <- unique(as.character(subset_data6mo_plot$Tessy_plot))
 tessy_recent6_colors <- fhi_discrete_palette(length(tessy_recent6_levels), sc2_palette)
 names(tessy_recent6_colors) <- tessy_recent6_levels
 
 combined_plot <- make_percent_trend_plot(
-  data = subset_data_season_plot,
+  data = subset_data6mo_plot,
   date_col = "Sampledate",
   percent_col = "Percent",
   count_col = "TotalSeq",
@@ -1875,6 +1962,9 @@ combined_plot <- make_percent_trend_plot(
   legend_position = "right",
   legend_ncol = 2
 )
+
+# Keep the existing subtitle call aligned with the actual six-month dataframe.
+subset_data_season_p <- subset_data6mo
 
 export_graph <- export_to_ppt(
   export_graph,
@@ -1893,7 +1983,7 @@ export_graph <- add_section_slide(export_graph, "Mutasjoner", "Mutasjonskombinas
 # Extract relevant mutation data and perform initial filtering and transformations
 mutfr <- SC2db %>%
   select(prove_tatt, spike_mut, nc_pangolin_short, Collapsed_pango, Tessy) %>%
-  filter(prove_tatt >= Sys.Date() - 365) %>%
+  filter(prove_tatt >= recent_12m_start, prove_tatt <= analysis_window_end) %>%
   mutate(
     Sampledate = as.Date(prove_tatt), # Convert prove_tatt to Date format
     Substitution = gsub(";", ",", spike_mut), # Replace semicolons with commas
@@ -1955,7 +2045,7 @@ S_mut_data <- SC2db %>%
     YearMonth = format_month_key_nb(Sampledate)
   ) %>%
   select(Sampledate, spike_mut, nc_pangolin_short, Collapsed_pango, YearMonth) %>%
-  filter(Sampledate >= Sys.Date() - months(12))
+  filter(Sampledate >= recent_12m_start, Sampledate <= analysis_window_end)
 
 for (mutation in mutations) {
   loop_started_at <- Sys.time()
@@ -2081,7 +2171,7 @@ Linmut <- SC2db %>%
   # Select relevant columns for mutation analysis
   select(spike_mut, my, year, week, nc_pangolin_short, nc_pangolin_long, Collapsed_pango, Tessy, key, prove_tatt) %>%
   # Filter to include data within the last year
-  filter(prove_tatt >= Sys.Date() - 365) %>%
+  filter(prove_tatt >= data_window_start, prove_tatt <= data_window_end) %>%
   # Split mutation data into separate entries per substitution
   mutate(Substitution = str_split(spike_mut, ";|,", simplify = FALSE)) %>%
   unnest(Substitution) %>%
@@ -2102,7 +2192,7 @@ spikecount <- Linmut %>%
     Percent = count / TotalSeq,
     Sampledate = parse_month_key_nb(my)
   ) %>%
-  filter(Sampledate >= Sys.Date() - 365)
+  filter(Sampledate >= data_window_start, Sampledate <= data_window_end)
 
 # --- Count Mutations per Uke by Pangolin Variant ---
 
@@ -2121,13 +2211,13 @@ spikecountcpango <- Linmut %>%
     Percent = count / Total,
     Sampledate = parse_month_key_nb(my)
   ) %>%
-  filter(Sampledate >= Sys.Date() - 180)
+  filter(Sampledate >= data_window_start, Sampledate <= data_window_end)
 
 # --- Identify Unique Pangolin Variants of Interest ---
 
 unique_collapsed_pangos <- spikecountcpango %>%
   # Filter variants with mutation percentages within specified range in the last 3 months
-  filter(Percent > 0.10, Percent < 0.95, Sampledate >= Sys.Date() - 90) %>%
+  filter(Percent > 0.10, Percent < 0.95, Sampledate >= data_window_start, Sampledate <= data_window_end) %>%
   distinct(Collapsed_pango)
 
 # --- Generate and Save Mutation Line Plots by Pangolin Variant ---
@@ -2202,7 +2292,7 @@ mut_int <- spikecount %>%
 plots <- lapply(mut_int$Substitution, function(mut) {
   # Filter data for each mutation and count occurrences by Pangolin lineage
   x_i <- Linmut %>%
-    filter(str_detect(Substitution, mut), my >= Sys.Date() - months(3)) %>%
+    filter(str_detect(Substitution, mut), my >= data_window_start) %>%
     count(my, nc_pangolin_short, Substitution)
 
   # Create a tree map for the mutation composition
@@ -2410,7 +2500,7 @@ if (!is.na(sc2_indel_date_col) && length(sc2_indel_cols) > 0 && !is.na(sc2_tessy
 
   sc2_indel_df <- sc2_indel_df %>%
     mutate(Tessy_group = trimws(as.character(Tessy_group))) %>%
-    filter(indel_plot_date >= (Sys.Date() %m-% months(6)))
+    filter(indel_plot_date >= recent_6m_start, indel_plot_date <= analysis_window_end)
 
   sc2_long <- sc2_indel_df %>%
     pivot_longer(cols = all_of(sc2_indel_cols), names_to = "mutation_col", values_to = "mutation_raw") %>%
@@ -2587,7 +2677,7 @@ for (table_info in table_data) {
 # ============================================================================
 export_graph <- add_section_slide(export_graph, "Pasientdata", "Demografi, geografi og kliniske fordelinger i overv\u00e5king", c("Kj\u00f8nn", "Alder", "Vaksinasjon"))
 
-patient_source_df <- if (exists("SC2db")) SC2db else SC2db
+patient_source_df <- if (exists("SC2db_all")) SC2db_all else SC2db
 patient_tessy_col <- intersect(c("Tessy", "tessy"), names(patient_source_df))[1]
 patient_date_col <- intersect(c("prove_tatt", "PROVE_TATT", "sample_date", "Sampledate"), names(patient_source_df))[1]
 patient_fylke_col <- intersect(c("pasient_fylke_name", "fylkenavn", "pasient_fylke"), names(patient_source_df))[1]

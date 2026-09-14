@@ -58,16 +58,39 @@ if (!exists("INF_25_26_raw_merged")) {
   stop("Object 'INF_25_26_raw_merged' is missing. Source INF_SQLquery_25-26.R first.")
 }
 
+# The temporary Sesongrapport includes only GISAID-submitted sequences, while the
+# normal report retains its existing ngs_report screening rule.
+temporary_sesongrapport <- tolower(Sys.getenv("INF_TEMPORARY_SESONGRAPPORT", unset = "false")) %in% c("1", "true", "yes")
+gisaid_submission_cols <- intersect(
+  c("gisaid_isolate_id", "gisaid_ha_id", "gisaid_na_id", "gisaid_m_id", "gisaid_ns_id", "gisaid_np_id", "gisaid_pa_id", "gisaid_pb1_id", "gisaid_pb2_id"),
+  names(INF_25_26_raw_merged)
+)
+if (temporary_sesongrapport && length(gisaid_submission_cols) == 0) {
+  stop("Temporary Sesongrapport requires at least one GISAID identifier column.")
+}
+gisaid_submitted <- rep(FALSE, nrow(INF_25_26_raw_merged))
+if (length(gisaid_submission_cols) > 0) {
+  gisaid_submitted <- apply(INF_25_26_raw_merged[, gisaid_submission_cols, drop = FALSE], 1, function(values) {
+    any(!is.na(values) & nzchar(trimws(as.character(values))))
+  })
+}
+
 INF_25_26_clean <- INF_25_26_raw_merged %>%
-  mutate(prove_tatt = as.Date(prove_tatt, format = "%Y-%m-%d")) %>%
-  filter(is.na(ngs_report) | trimws(ngs_report) == "") %>%
+  mutate(
+    prove_tatt = as.Date(prove_tatt, format = "%Y-%m-%d"),
+    pasient_alder = suppressWarnings(as.numeric(trimws(as.character(pasient_alder)))),
+    .sesongrapport_gisaid_submitted = gisaid_submitted,
+    .sesongrapport_include = if (temporary_sesongrapport) .sesongrapport_gisaid_submitted else (is.na(ngs_report) | trimws(ngs_report) == "")
+  ) %>%
+  filter(.sesongrapport_include) %>%
   filter(!stringr::str_detect(dplyr::coalesce(prove_kategori, ""), stringr::regex("^\\s*(?:3|P3(?:_.*)?)\\s*$", ignore_case = TRUE))) %>%
   filter(!stringr::str_detect(dplyr::coalesce(prove_kategori, ""), stringr::regex("ref", ignore_case = TRUE))) %>%
   filter(trimws(coalesce(tessy_reportable_variable, "")) != "") %>%
   filter(!stringr::str_detect(dplyr::coalesce(tessy_reportable_variable, ""), stringr::regex("ref", ignore_case = TRUE))) %>%
+  select(-.sesongrapport_gisaid_submitted, -.sesongrapport_include) %>%
   as.data.frame() %>%
-  normalize_geography_columns()
 
+  normalize_geography_columns()
 seq_data_raw <- tbl(conFLU2526, "SEQUENCEDATA") %>%
   collect() %>%
   janitor::clean_names()

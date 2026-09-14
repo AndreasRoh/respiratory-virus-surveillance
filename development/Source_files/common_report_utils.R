@@ -133,22 +133,39 @@ heatmap_axis_text_size <- function(
   max(min_size, base_size - reduction)
 }
 
+iso_week_start <- function(iso_year, iso_week) {
+  iso_year <- as.integer(iso_year)
+  iso_week <- as.integer(iso_week)
+  jan_fourth <- as.Date(sprintf("%04d-01-04", iso_year))
+  week_one_start <- jan_fourth - (lubridate::wday(jan_fourth, week_start = 1) - 1L)
+  week_one_start + lubridate::weeks(iso_week - 1L)
+}
+
 season_window_bounds <- function(start_year) {
   sy <- as.integer(start_year)
+  start <- iso_week_start(sy, 35L)
+  end <- iso_week_start(sy + 1L, 35L) - lubridate::days(1L)
+  list(start = as.Date(start), end = as.Date(end))
+}
+
+season_info_from_start_year <- function(start_year) {
+  sy <- as.integer(start_year)
+  if (length(sy) != 1L || is.na(sy) || sy < 2000L) {
+    stop("`start_year` must be a single four-digit season start year.")
+  }
+
   list(
-    start = as.Date(sprintf("%04d-08-29", sy)),
-    end = as.Date(sprintf("%04d-08-28", sy + 1L))
+    current_start_year = sy,
+    current_label = season_label_from_start_year(sy),
+    current_bounds = season_window_bounds(sy),
+    previous_start_year = sy - 1L,
+    previous_label = season_label_from_start_year(sy - 1L),
+    previous_bounds = season_window_bounds(sy - 1L)
   )
 }
 
 current_and_previous_seasons <- function(today = Sys.Date()) {
-  cur_start_year <- as.integer(season_start_year_from_date(today))
-  list(
-    current_start_year = cur_start_year,
-    current_label = season_label_from_start_year(cur_start_year),
-    previous_start_year = cur_start_year - 1L,
-    previous_label = season_label_from_start_year(cur_start_year - 1L)
-  )
+  season_info_from_start_year(season_start_year_from_date(today))
 }
 
 # Run-quality window:
@@ -176,7 +193,24 @@ normalize_norwegian_text <- function(x) {
   if (!is.character(x)) return(x)
 
   u <- function(...) intToUtf8(c(...))
-  out <- enc2utf8(x)
+  out <- x
+  unknown_or_bytes <- !is.na(out) & Encoding(out) %in% c("unknown", "bytes")
+  if (any(unknown_or_bytes)) {
+    idx <- which(unknown_or_bytes)
+    as_utf8 <- iconv(out[idx], from = "UTF-8", to = "UTF-8", sub = NA)
+    valid_utf8 <- !is.na(as_utf8)
+    if (any(valid_utf8)) {
+      out[idx[valid_utf8]] <- as_utf8[valid_utf8]
+    }
+    if (any(!valid_utf8)) {
+      out[idx[!valid_utf8]] <- iconv(out[idx[!valid_utf8]], from = "latin1", to = "UTF-8", sub = NA)
+    }
+  }
+  latin1_encoded <- !is.na(out) & Encoding(out) == "latin1"
+  if (any(latin1_encoded)) {
+    out[latin1_encoded] <- iconv(out[latin1_encoded], from = "latin1", to = "UTF-8", sub = NA)
+  }
+
   na_idx <- is.na(out)
   replacements <- setNames(
     c(
@@ -201,7 +235,7 @@ normalize_norwegian_text <- function(x) {
     )
   )
   for (i in seq_along(replacements)) {
-    out <- gsub(names(replacements)[i], unname(replacements[i]), out, fixed = TRUE, useBytes = TRUE)
+    out <- gsub(names(replacements)[i], unname(replacements[i]), out, fixed = TRUE)
   }
   out <- trimws(out)
   out[na_idx] <- NA_character_
@@ -217,6 +251,7 @@ normalize_object_text <- function(x) {
 
   if (is.character(x)) {
     return(normalize_norwegian_text(x))
+
   }
 
   if (is.data.frame(x)) {
@@ -234,6 +269,22 @@ normalize_object_text <- function(x) {
 
   x
 }
+normalize_plot_text <- function(plot) {
+  if (inherits(plot, "ggplot")) {
+    for (i in seq_along(plot$labels)) {
+      label_value <- plot$labels[[i]]
+      if (is.factor(label_value)) label_value <- as.character(label_value)
+      if (is.character(label_value)) plot$labels[[i]] <- normalize_norwegian_text(label_value)
+    }
+  }
+
+  if (inherits(plot, "patchwork") && !is.null(plot$patches$plots)) {
+    plot$patches$plots <- lapply(plot$patches$plots, normalize_plot_text)
+  }
+
+  plot
+}
+
 normalize_geography_key <- function(x) {
   x_norm <- normalize_norwegian_text(x)
   x_norm <- trimws(x_norm)
@@ -663,6 +714,7 @@ save_plot_to_ppt <- function(
   master = "Office Theme",
   title = NULL
 ) {
+  plot <- normalize_plot_text(plot)
   plot_rvg <- rvg::dml(ggobj = plot)
   slide_title <- title
 

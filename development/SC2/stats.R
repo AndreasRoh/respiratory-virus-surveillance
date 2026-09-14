@@ -79,6 +79,11 @@ like <- data.table::like
 yearmonth <- function(x) as.Date(format(as.Date(x), "%Y-%m-01"))
 
 source(file.path(bundle_scripts_dir, "SC2_SQLquery_BNCOVID19.R"))
+source(file.path(dirname(bundle_scripts_dir), "Source_files", "common_report_utils.R"))
+# Change this one value to 2026L for the 2026/27 report.
+reporting_season_start_year <- 2025L
+reporting_season_info <- season_info_from_start_year(reporting_season_start_year)
+reporting_season_bounds <- reporting_season_info$current_bounds
 source(file.path(bundle_scripts_dir, "SC2_SQLquery_25-26.R"))
 source(file.path(bundle_scripts_dir, "SC2_DataCleaning_BNCOVID19.R"))
 source(file.path(bundle_scripts_dir, "SC2_DataCleaning_25-26.R"))
@@ -168,14 +173,18 @@ sc2_base <- allvariants_v |>
   mutate(
     prove_tatt_date = as.Date(prove_tatt),
     my_date = as.Date(my)
+  ) |>
+  filter(
+    prove_tatt_date >= reporting_season_bounds$start,
+    prove_tatt_date <= reporting_season_bounds$end
   )
 
-max_date <- max(sc2_base$prove_tatt_date, na.rm = TRUE)
-start_6m <- max_date %m-% months(6)
+max_date <- reporting_season_bounds$end
+start_6m <- reporting_season_bounds$start
 months_6m <- month_seq(start_6m, max_date)
 
 stat_monthly <- build_monthly_variant_counts(
-  data = sc2_base |> filter(prove_tatt_date > start_6m),
+  data = sc2_base,
   month_col = "prove_tatt_date",
   variant_col = "nc_pangolin_short",
   months = months_6m,
@@ -183,7 +192,7 @@ stat_monthly <- build_monthly_variant_counts(
 )
 
 vum_monthly <- build_monthly_variant_counts(
-  data = sc2_base |> filter(prove_tatt_date > start_6m),
+  data = sc2_base,
   month_col = "prove_tatt_date",
   variant_col = "VUM",
   months = months_6m,
@@ -191,15 +200,15 @@ vum_monthly <- build_monthly_variant_counts(
 )
 
 voi_monthly <- build_monthly_variant_counts(
-  data = sc2_base |> filter(prove_tatt_date > start_6m),
+  data = sc2_base,
   month_col = "prove_tatt_date",
   variant_col = "VOI",
   months = months_6m,
   variant_name = "VOI"
 )
 
-latest_my <- max(sc2_base$my_date, na.rm = TRUE)
-start_2m <- floor_date(latest_my %m-% months(1), "month")
+latest_my <- floor_date(reporting_season_bounds$end, "month")
+start_2m <- floor_date(reporting_season_bounds$start, "month")
 months_2m <- month_seq(start_2m, latest_my)
 
 top10_variants <- sc2_base |>
@@ -216,7 +225,7 @@ top10_monthly <- sc2_base |>
   mutate(flagg = 0L) |>
   arrange(my, nc_pangolin_short)
 
-all_months <- month_seq(min(sc2_base$my_date, na.rm = TRUE), max(sc2_base$my_date, na.rm = TRUE))
+all_months <- months_6m
 
 stat_total <- sc2_base |>
   filter(!is.na(Collapsed_pango), Collapsed_pango != "") |>

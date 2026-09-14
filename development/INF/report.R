@@ -235,9 +235,27 @@ fludb <- fludb %>%
 
 invisible(timed_step("Run FLuDB QC checks", source(file.path(bundle_scripts_dir, "INF_QC_25-26.R"))))
 
-season_info <- current_and_previous_seasons(Sys.Date())
+# Change this one value to 2026L for the 2026/27 report.
+reporting_season_start_year <- 2025L
+season_info <- season_info_from_start_year(reporting_season_start_year)
 current_season_label <- season_info$current_label
 previous_season_label <- season_info$previous_label
+reporting_season_bounds <- season_info$current_bounds
+
+# One-off extension for the requested Sesongrapport; normal seasonal runs are unchanged.
+temporary_sesongrapport <- tolower(Sys.getenv("INF_TEMPORARY_SESONGRAPPORT", unset = "false")) %in% c("1", "true", "yes")
+reporting_window_bounds <- reporting_season_bounds
+if (temporary_sesongrapport) {
+  reporting_window_bounds$start <- as.Date(sprintf("%d-07-01", reporting_season_start_year))
+  message("Temporary Sesongrapport window: ", reporting_window_bounds$start, " to ", reporting_window_bounds$end)
+}
+
+fludb_all <- fludb
+fludb <- fludb_all %>%
+  filter(
+    prove_tatt >= reporting_window_bounds$start,
+    prove_tatt <= reporting_window_bounds$end
+  )
 
 format_presentation_season <- function(season_label) {
   season_chr <- as.character(season_label)
@@ -2235,7 +2253,7 @@ ha_mutation_trend_source <- fludb %>%
   )
 
 ha_mutation_subtype_order <- flu_reportable_subtypes
-last_four_month_start <- floor_date(Sys.Date(), unit = "month") %m-% months(3)
+last_four_month_start <- max(reporting_window_bounds$start, floor_date(min(as.Date(Sys.Date()), reporting_window_bounds$end), unit = "month") %m-% months(3))
 
 for (current_subtype in ha_mutation_subtype_order) {
   subtype_trend_source <- ha_mutation_trend_source %>%
@@ -3118,7 +3136,7 @@ export_graph_f <- add_section_output(
 )
 
 # Step 1: Filter the dataset for relevant subtypes, keep the last 6 months, and select columns
-heatmap_month_window_start <- floor_date(Sys.Date() %m-% months(5), unit = "month")
+heatmap_month_window_start <- max(reporting_window_bounds$start, floor_date(min(as.Date(Sys.Date()), reporting_window_bounds$end), unit = "month") %m-% months(5))
 
 filtered_fludb <- fludb %>%
   mutate(
@@ -3322,14 +3340,18 @@ results_share_root <- Sys.getenv(
 
 
 # Create the file name including the season
-file_name_result <- paste0(
-  "Influenza_",
-  "_Week.",
-  current_week,
-  "-",
-  current_year,
-  "_result.pptx"
-)
+file_name_result <- if (temporary_sesongrapport) {
+  paste0("Sesongrapport_Week.", current_week, "-", current_year, "_result.pptx")
+} else {
+  paste0(
+    "Influenza_",
+    "_Week.",
+    current_week,
+    "-",
+    current_year,
+    "_result.pptx"
+  )
+}
 # Specify the full file paths
 file_path_result <- file.path(
   results_root,
@@ -3355,8 +3377,8 @@ add_meta_plot <- function(presentation, plot_obj, plot_title) {
 
 
 norway_geojson_path <- resolve_norway_geojson_path()
-flu_prev <- fludb %>% filter(season == previous_season_label)
-flu_curr <- fludb %>% filter(season == current_season_label)
+flu_prev <- fludb_all %>% filter(season == previous_season_label)
+flu_curr <- fludb_all %>% filter(season == current_season_label)
 shared_fylke_fill_limits <- c(
   0,
   max(
@@ -3407,7 +3429,7 @@ if (all(c("pasient_kjnn", "season", "prove_tatt") %in% names(fludb))) {
     fhi_discrete_palette(3, kvalitativ_comb),
     c("Female", "Male", "Ukjent")
   )
-  kjonn_compare <- fludb %>%
+  kjonn_compare <- fludb_all %>%
     normalize_sex_column(candidate_cols = c("pasient_kjnn", "pasient_kjonn")) %>%
     mutate(
       pasient_kjonn_std = factor(
@@ -3491,7 +3513,7 @@ if (all(c("pasient_kjnn", "season", "prove_tatt") %in% names(fludb))) {
 
 # Aldersgruppe: season comparison in same side-by-side format as Kjønn.
 if (all(c("pasient_aldersgruppe", "season") %in% names(fludb))) {
-  alder_compare <- fludb %>%
+  alder_compare <- fludb_all %>%
     mutate(
       pasient_aldersgruppe = ifelse(
         is.na(pasient_aldersgruppe) | trimws(as.character(pasient_aldersgruppe)) == "",
@@ -3628,14 +3650,18 @@ if (!is.na(subclade_color_col) && !is.null(virus_col) && "prove_tatt" %in% names
   }
 }
 
-excel_export_file_name_xlsx <- paste0(
-  "Influenza_",
-  "_Week.",
-  current_week,
-  "-",
-  current_year,
-  "_tabeller.xlsx"
-)
+excel_export_file_name_xlsx <- if (temporary_sesongrapport) {
+  paste0("Sesongrapport_Week.", current_week, "-", current_year, "_tabeller.xlsx")
+} else {
+  paste0(
+    "Influenza_",
+    "_Week.",
+    current_week,
+    "-",
+    current_year,
+    "_tabeller.xlsx"
+  )
+}
 excel_export_prefix_csv <- sub("\\.xlsx$", "", excel_export_file_name_xlsx)
 
 excel_export_path_result_xlsx <- file.path(

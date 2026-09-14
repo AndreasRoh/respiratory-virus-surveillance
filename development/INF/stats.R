@@ -78,6 +78,11 @@ check_install_update_packages(required_packages)
 suppressPackageStartupMessages(lapply(required_packages, library, character.only = TRUE))
 
 source(file.path(bundle_scripts_dir, "INF_SQLquery_25-26.R"))
+source(file.path(dirname(bundle_scripts_dir), "Source_files", "common_report_utils.R"))
+# Change this one value to 2026L for the 2026/27 report.
+reporting_season_start_year <- 2025L
+reporting_season_info <- season_info_from_start_year(reporting_season_start_year)
+reporting_season_bounds <- reporting_season_info$current_bounds
 source(file.path(bundle_scripts_dir, "INF_DataCleaning_25-26.R"))
 
 if (!exists("fludb") && exists("INF_25_26_raw_merged")) {
@@ -172,7 +177,10 @@ fludb_clean <- fludb |>
     week_year = isoweek(prove_tatt),
     year = year(prove_tatt)
   ) |>
-  filter(!(year == 2025 & week_year < 35))
+  filter(
+    prove_tatt >= reporting_season_bounds$start,
+    prove_tatt <= reporting_season_bounds$end
+  )
 
 flu_filtered <- fludb_clean |>
   filter(

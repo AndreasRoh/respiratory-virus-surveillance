@@ -65,9 +65,19 @@ rsvdb <- rsvdb %>%
 
 rsvdb <- normalize_sex_column(rsvdb, candidate_cols = c('pasient_kjonn', 'pasient_kjnn'))
 
-season_info <- current_and_previous_seasons(Sys.Date())
+# Change this one value to 2026L for the 2026/27 report.
+reporting_season_start_year <- 2025L
+season_info <- season_info_from_start_year(reporting_season_start_year)
 current_season_label <- season_info$current_label
 previous_season_label <- season_info$previous_label
+reporting_season_bounds <- season_info$current_bounds
+
+rsvdb_all <- rsvdb
+rsvdb <- rsvdb_all %>%
+  filter(
+    prove_tatt >= reporting_season_bounds$start,
+    prove_tatt <= reporting_season_bounds$end
+  )
 
 month_levels <- rsvdb %>%
   distinct(month_date, month_label) %>%
@@ -245,7 +255,7 @@ export_graph_f <- add_section_slide(
 
 if ('pasient_aldersgruppe' %in% names(rsvdb)) {
   p_age_pie <- build_two_season_pie_compare(
-    rsvdb %>% filter(!is.na(pasient_aldersgruppe), trimws(as.character(pasient_aldersgruppe)) != ''),
+    rsvdb_all %>% filter(!is.na(pasient_aldersgruppe), trimws(as.character(pasient_aldersgruppe)) != ''),
     season_col = 'season',
     category_col = 'pasient_aldersgruppe',
     previous_label = previous_season_label,
@@ -268,8 +278,8 @@ if (all(c('pasient_fylke_name', 'pasient_landsdel', 'season') %in% names(rsvdb))
   )
 
   norway_geojson_path <- resolve_norway_geojson_path()
-  rsv_prev <- rsvdb %>% filter(season == previous_season_label)
-  rsv_curr_map <- rsvdb %>% filter(season == current_season_label)
+  rsv_prev <- rsvdb_all %>% filter(season == previous_season_label)
+  rsv_curr_map <- rsvdb_all %>% filter(season == current_season_label)
 
   p_fylke_prev <- build_fylke_map_plot_shared(
     rsv_prev,
